@@ -1,13 +1,12 @@
-# ─────────────────────────────────────────────
 # 🧩 ALL-IN-ONE FINAL PIPELINE for GenesManager
 # Automatyczne: parsing → wybór → generacja → publikacja
-# ─────────────────────────────────────────────
 
 import os
 import json
 import time
 import subprocess
 import requests
+import shutil
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
@@ -32,9 +31,6 @@ PUBLISHED_TITLES_PATH = Path("published_posts.json")
 ARTICLES_JSON_PATH = Path("all_articles_combined.json")
 POST_DIR = Path("output_posts")
 
-# ─────────────────────────────────────────────
-# 📦 2. Historia publikacji
-# ─────────────────────────────────────────────
 if PUBLISHED_TITLES_PATH.exists():
     with PUBLISHED_TITLES_PATH.open("r", encoding="utf-8") as f:
         published_titles = set(json.load(f))
@@ -45,9 +41,6 @@ def save_published_titles(titles):
     with PUBLISHED_TITLES_PATH.open("w", encoding="utf-8") as f:
         json.dump(sorted(list(titles)), f, ensure_ascii=False, indent=2)
 
-# ─────────────────────────────────────────────
-# 🕒 3. Pomocnicza funkcja daty
-# ─────────────────────────────────────────────
 def is_recent(article_date_str):
     try:
         article_date = datetime.strptime(article_date_str, "%Y-%m-%d")
@@ -56,38 +49,51 @@ def is_recent(article_date_str):
         return False
 
 # ─────────────────────────────────────────────
-# 🧠 4. Wybór artykułów przez GPT-4
+# 🧠 4. Wybór artykułów przez GPT-4 z retry i logowaniem
 # ─────────────────────────────────────────────
-def pick_most_relevant_articles(all_articles, n=2):
+def pick_most_relevant_articles(all_articles, n=2, retries=2):
     recent_articles = [a for a in all_articles if is_recent(a.get("date", ""))]
     unpub = [a for a in recent_articles if a.get("title", "").strip() not in published_titles]
 
     if len(unpub) <= n:
         return unpub
 
-    prompt = (
-        "Jesteś doświadczonym redaktorem medycznym. Spośród poniższych artykułów wybierz dokładnie 2, które są najważniejsze dla właścicieli i managerów placówek medycznych. "
-        "Priorytetowo traktuj informacje o postępowaniach konkursowych NFZ oraz o zmianach w przepisach (NFZ, MZ, RCL). "
-        "Podaj tylko numery wybranych pozycji jako listę JSON, np. [1, 4]\n\n"
-    )
-    for i, a in enumerate(unpub, 1):
-        prompt += f"{i}. {a['title']}: {a.get('lead', '')}\n"
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "Jesteś doświadczonym redaktorem medycznym."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3
+    for attempt in range(retries):
+        prompt = (
+            "Jesteś doświadczonym redaktorem medycznym. Spośród poniższych artykułów wybierz dokładnie 2, "
+            "które są najważniejsze dla właścicieli i managerów placówek medycznych. "
+            "Priorytetowo traktuj informacje o postępowaniach konkursowych NFZ oraz o zmianach w przepisach (NFZ, MZ, RCL). "
+            "Podaj tylko numery wybranych pozycji jako listę JSON, np. [1, 4]\n\n"
         )
-        content = response.choices[0].message.content
-        indices = json.loads(content)
-        return [unpub[i - 1] for i in indices if 0 < i <= len(unpub)]
-    except Exception as e:
-        print(f"⚠️ Błąd przy wyborze przez AI: {e}")
-        return unpub[:n]
+        for i, a in enumerate(unpub, 1):
+            prompt += f"{i}. {a['title']}: {a.get('lead', '')}\n"
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "Jesteś doświadczonym redaktorem medycznym."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3
+            )
+            content = response.choices[0].message.content.strip() if response.choices else ""
+            print(f"🔹 Debug GPT response (attempt {attempt+1}): {repr(content)}")
+            if not content:
+                time.sleep(2)
+                continue
+            try:
+                indices = json.loads(content)
+                return [unpub[i - 1] for i in indices if 0 < i <= len(unpub)]
+            except json.JSONDecodeError:
+                print("⚠️ Nie udało się sparsować JSON, retry...")
+                time.sleep(2)
+        except Exception as e:
+            print(f"⚠️ Błąd przy wyborze przez AI (attempt {attempt+1}): {e}")
+            time.sleep(2)
+
+    print("⚠️ Fallback: wybieram pierwsze 2 nieopublikowane artykuły")
+    return unpub[:n]
 
 # ─────────────────────────────────────────────
 # 🖊️ 5. Generowanie postów
@@ -103,7 +109,7 @@ def extract_title_and_body(file_path):
         if not lines:
             return None, None
         title = lines[0].replace("#", "").replace("<h1>", "").replace("</h1>", "").strip()
-        title = title.capitalize()
+        title = title[0].upper() + title[1:] if title else ""
         body = "".join(lines[1:]).strip()
         return title, body
 
@@ -112,9 +118,7 @@ def publish_to_wordpress():
         print(f"❌ Folder {POST_DIR} nie istnieje.")
         return
 
-    headers = {
-        "Content-Type": "application/json"
-    }
+    headers = {"Content-Type": "application/json"}
 
     for file in sorted(POST_DIR.glob("*.txt")):
         title, body = extract_title_and_body(file)
@@ -145,6 +149,17 @@ def main():
         print("❌ Parser nie został uruchomiony poprawnie.")
         return
 
+    # Bezpieczne czyszczenie output_posts
+    POST_DIR.mkdir(exist_ok=True)
+    for file in POST_DIR.glob("*"):
+        try:
+            if file.is_file():
+                file.unlink()
+            elif file.is_dir():
+                shutil.rmtree(file, ignore_errors=True)
+        except Exception as e:
+            print(f"⚠️ Nie udało się usunąć {file}: {e}")
+
     if not ARTICLES_JSON_PATH.exists():
         print("❌ Nie znaleziono pliku all_articles_combined.json po parsowaniu.")
         return
@@ -161,29 +176,14 @@ def main():
         return
 
     print("\n✍️ 4. Generowanie postów z AI...")
-    with open("selected_articles.json", "w", encoding="utf-8") as f:
-        json.dump(selected, f, ensure_ascii=False, indent=2)
-
-    with open("selected_articles.json", "r", encoding="utf-8") as f:
-        selected_articles = json.load(f)
-        to_generate = [
-            a for a in selected_articles
-            if a.get("title", "").strip() and a.get("title", "").strip() not in published_titles
-        ]
-
-        if not to_generate:
-            print("⚠️ Wszystkie wybrane artykuły zostały już opublikowane – brak nowych postów do generacji.")
-            return
-
-        generate_posts(to_generate)
+    generate_posts(selected)
 
     print("\n🌐 5. Publikacja na WordPress...")
     publish_to_wordpress()
 
     print("\n💾 6. Zapis publikacji...")
-    for art in to_generate:
-        if art.get("title", "").strip():
-            published_titles.add(art.get("title").strip())
+    for art in selected:
+        published_titles.add(art.get("title", ""))
     save_published_titles(published_titles)
 
     print("\n✅ Zakończono cały pipeline.")
