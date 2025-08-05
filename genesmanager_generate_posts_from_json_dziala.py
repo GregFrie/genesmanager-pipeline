@@ -5,20 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # klucz z .env
-
-# 🔤 Poprawia styl polskiego tytułu
-def format_polish_title(raw_title: str) -> str:
-    raw_title = raw_title.strip()
-    if raw_title.lower().startswith("tytuł:"):
-        raw_title = raw_title[6:].strip()
-    if not raw_title:
-        return ""
-    words = raw_title.split()
-    if not words:
-        return ""
-    words[0] = words[0].capitalize()
-    return " ".join(words)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def extract_content_from_url(url):
     try:
@@ -49,33 +36,38 @@ def extract_content_from_url(url):
 def sanitize_filename(name):
     return "".join(c if c.isalnum() or c in " _-" else "_" for c in name).strip()[:60]
 
+def normalize_title(title):
+    title = title.strip()
+    if title.lower().startswith("tytuł"):
+        title = title.split(":", 1)[-1].strip()
+    return title.capitalize()
+
 def generate_posts(articles):
     output_dir = "output_posts"
     os.makedirs(output_dir, exist_ok=True)
     processed_urls = set()
 
-    for i, article in enumerate(articles):
+    for i, article in enumerate(articles, 1):
         try:
             url = article.get("url", "").strip()
             if not url or url in processed_urls:
                 continue
             processed_urls.add(url)
 
-            title = format_polish_title(article.get("title", "").strip())
+            title = normalize_title(article.get("title", "").strip())
             lead = article.get("lead", "").strip()
             content = extract_content_from_url(url)
             if not content and lead:
                 content = lead
             if not content:
-                print(f"⚠️ Pominięto artykuł {i+1} – brak treści z URL i LEAD")
+                print(f"⚠️ Pominięto artykuł {i} – brak treści z URL i LEAD")
                 continue
 
             prompt = (
                 "Napisz ekspercki, ale przystępny artykuł blogowy na podstawie poniższego tekstu źródłowego. "
                 "Artykuł ma być unikalny, inspirowany treścią, ale nie może jej kopiować. "
                 "Ma być przeznaczony dla właścicieli i managerów podmiotów medycznych.\n\n"
-                f"Tytuł artykułu: {title}\n\n"
-                f"Treść źródłowa:\n{content}"
+                f"{content}"
             )
 
             response = client.chat.completions.create(
@@ -90,14 +82,14 @@ def generate_posts(articles):
             final_text = response.choices[0].message.content.strip() if response.choices else "⚠️ Brak odpowiedzi od modelu"
 
             filename_base = sanitize_filename(title if title else "bez_tytulu")
-            filename = f"{i+1:03d}_{filename_base}.txt"
+            filename = f"{i:03d}_{filename_base}.txt"
             output_path = os.path.join(output_dir, filename)
 
             with open(output_path, "w", encoding="utf-8") as out_f:
-                out_f.write(final_text)
+                out_f.write(title + "\n\n" + final_text)
 
             print(f"✅ Wygenerowano: {filename}")
             time.sleep(1.5)
 
         except Exception as e:
-            print(f"❌ Błąd przy generowaniu artykułu {i+1}: {e}")
+            print(f"❌ Błąd przy generowaniu artykułu {i}: {e}")
