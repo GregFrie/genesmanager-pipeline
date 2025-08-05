@@ -5,9 +5,8 @@ import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # klucz z .env
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# 🔤 Poprawia styl polskiego tytułu
 def format_polish_title(raw_title: str) -> str:
     raw_title = raw_title.strip()
     if raw_title.lower().startswith("tytuł:"):
@@ -67,8 +66,8 @@ def generate_posts(articles):
             if not content and lead:
                 content = lead
             if not content:
-                print(f"⚠️ Pominięto artykuł {i+1} – brak treści z URL i LEAD")
-                continue
+                print(f"⚠️ Artykuł {i+1}: brak treści – fallback do komunikatu zastępczego.")
+                content = f"Aktualizacja z serwisu {article.get('source','nieznane źródło')} – brak szczegółowej treści na stronie źródłowej."
 
             prompt = (
                 "Napisz ekspercki, ale przystępny artykuł blogowy na podstawie poniższego tekstu źródłowego. "
@@ -94,7 +93,7 @@ def generate_posts(articles):
             output_path = os.path.join(output_dir, filename)
 
             with open(output_path, "w", encoding="utf-8") as out_f:
-                out_f.write(final_text)
+                out_f.write(title + "\n\n" + final_text)
 
             print(f"✅ Wygenerowano: {filename}")
             time.sleep(1.5)
