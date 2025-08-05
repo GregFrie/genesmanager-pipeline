@@ -1,10 +1,9 @@
-# 🧩 ALL-IN-ONE FINAL PIPELINE for GenesManager
-# Automatyczne: parsing → wybór → generacja → publikacja
+# 🧩 GenesManager Render-Stable FINAL Pipeline
+# Parsing → AI Selection → Post Generation → WordPress Publish (without subprocess)
 
 import os
 import json
 import time
-import subprocess
 import requests
 import shutil
 from datetime import datetime, timedelta
@@ -12,8 +11,11 @@ from dotenv import load_dotenv
 from pathlib import Path
 from openai import OpenAI
 
+# Import parser directly instead of using subprocess
+import parser_all_sources_combined_RENDER_STABLE as parser
+
 # ─────────────────────────────────────────────
-# ⚙️ 1. Konfiguracja
+# ⚙️ 1. Config
 # ─────────────────────────────────────────────
 load_dotenv("bot.env")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -25,7 +27,6 @@ API_ENDPOINT = f"{WP_URL}/wp-json/wp/v2/posts"
 AUTH = (WP_USER, WP_APP_PASSWORD)
 
 DNI_WSTECZ = 3
-ARTYKULY_NA_ZRODLO = 2
 CUTOFF_DATE = datetime.today() - timedelta(days=DNI_WSTECZ)
 PUBLISHED_TITLES_PATH = Path("published_posts.json")
 ARTICLES_JSON_PATH = Path("all_articles_combined.json")
@@ -49,11 +50,15 @@ def is_recent(article_date_str):
         return False
 
 # ─────────────────────────────────────────────
-# 🧠 4. Wybór artykułów przez GPT-4 z retry i logowaniem
+# 🧠 2. AI Selection with logging & fallback
 # ─────────────────────────────────────────────
 def pick_most_relevant_articles(all_articles, n=2, retries=2):
     recent_articles = [a for a in all_articles if is_recent(a.get("date", ""))]
     unpub = [a for a in recent_articles if a.get("title", "").strip() not in published_titles]
+
+    print(f"\nℹ️ Po odfiltrowaniu mamy {len(unpub)} nieopublikowanych artykułów")
+    for i, a in enumerate(unpub, 1):
+        print(f"   {i}. {a.get('title','(brak tytułu)')}")
 
     if len(unpub) <= n:
         return unpub
@@ -66,7 +71,7 @@ def pick_most_relevant_articles(all_articles, n=2, retries=2):
             "Podaj tylko numery wybranych pozycji jako listę JSON, np. [1, 4]\n\n"
         )
         for i, a in enumerate(unpub, 1):
-            prompt += f"{i}. {a['title']}: {a.get('lead', '')}\n"
+            prompt += f"{i}. {a.get('title','(brak tytułu)')}: {a.get('lead','')}\n"
 
         try:
             response = client.chat.completions.create(
@@ -84,7 +89,10 @@ def pick_most_relevant_articles(all_articles, n=2, retries=2):
                 continue
             try:
                 indices = json.loads(content)
-                return [unpub[i - 1] for i in indices if 0 < i <= len(unpub)]
+                selected = [unpub[i - 1] for i in indices if 0 < i <= len(unpub)]
+                with open("selected_articles.json","w",encoding="utf-8") as f:
+                    json.dump(selected,f,ensure_ascii=False,indent=2)
+                return selected
             except json.JSONDecodeError:
                 print("⚠️ Nie udało się sparsować JSON, retry...")
                 time.sleep(2)
@@ -96,20 +104,19 @@ def pick_most_relevant_articles(all_articles, n=2, retries=2):
     return unpub[:n]
 
 # ─────────────────────────────────────────────
-# 🖊️ 5. Generowanie postów
+# 🖊️ 3. Generowanie postów
 # ─────────────────────────────────────────────
-from genesmanager_generate_posts_from_json_dziala import generate_posts
+from genesmanager_generate_posts_from_json_RENDER_STABLE import generate_posts
 
 # ─────────────────────────────────────────────
-# 🌐 6. Publikacja na WordPress
+# 🌐 4. WordPress Publish
 # ─────────────────────────────────────────────
 def extract_title_and_body(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
         if not lines:
             return None, None
-        title = lines[0].replace("#", "").replace("<h1>", "").replace("</h1>", "").strip()
-        title = title[0].upper() + title[1:] if title else ""
+        title = lines[0].strip()
         body = "".join(lines[1:]).strip()
         return title, body
 
@@ -138,18 +145,17 @@ def publish_to_wordpress():
             print(f"⚠️ Pominięto pusty lub niepoprawny plik: {file.name}")
 
 # ─────────────────────────────────────────────
-# 🚀 7. Główna logika
+# 🚀 5. Main
 # ─────────────────────────────────────────────
 def main():
-    print("\n🛠️ 1. Uruchamianie parsera...")
-    parser_path = Path(__file__).parent / "parser_all_sources_combined_dziala.py"
-    result = subprocess.run(["python", str(parser_path.resolve())])
-
-    if result.returncode != 0:
-        print("❌ Parser nie został uruchomiony poprawnie.")
+    print("\n🛠️ 1. Uruchamianie parsera bez subprocess...")
+    try:
+        parser.run_all_parsers()
+    except Exception as e:
+        print(f"❌ Parser zgłosił błąd: {e}")
         return
 
-    # Bezpieczne czyszczenie output_posts
+    # Clear output_posts
     POST_DIR.mkdir(exist_ok=True)
     for file in POST_DIR.glob("*"):
         try:
@@ -183,7 +189,8 @@ def main():
 
     print("\n💾 6. Zapis publikacji...")
     for art in selected:
-        published_titles.add(art.get("title", ""))
+        if art.get("title", "").strip():
+            published_titles.add(art["title"].strip())
     save_published_titles(published_titles)
 
     print("\n✅ Zakończono cały pipeline.")
