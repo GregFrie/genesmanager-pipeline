@@ -1,5 +1,6 @@
 import json
 import time
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from selenium import webdriver
@@ -19,33 +20,29 @@ def create_driver():
 
 # ---------------- NFZ Centrala ----------------
 def parse_nfz_centrala_articles():
+    print("▶ Pobieranie: NFZ Centrala")
     BASE_URL = "https://www.nfz.gov.pl/aktualnosci/aktualnosci-centrali/"
     DAYS_BACK = 9
-    ARTICLE_CLASS = "news"
-    DATE_CLASS = "date"
-    TITLE_CLASS = "title"
     driver = create_driver()
     all_articles = []
     try:
         for page_num in range(1, 4):
             url = BASE_URL if page_num == 1 else f"{BASE_URL}?page={page_num}"
             driver.get(url)
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_all_elements_located((By.CLASS_NAME, ARTICLE_CLASS))
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_all_elements_located((By.CLASS_NAME, "news"))
             )
-            time.sleep(3)
-            articles = driver.find_elements(By.CLASS_NAME, ARTICLE_CLASS)
+            time.sleep(2)
+            articles = driver.find_elements(By.CLASS_NAME, "news")
             for article in articles:
                 try:
-                    date_div = article.find_element(By.CLASS_NAME, DATE_CLASS)
-                    date_text = date_div.text.strip()
+                    date_text = article.find_element(By.CLASS_NAME, "date").text.strip()
                     article_date = datetime.strptime(date_text, "%d.%m.%Y")
                     if article_date < datetime.now() - timedelta(days=DAYS_BACK):
                         continue
-                    title_div = article.find_element(By.CLASS_NAME, TITLE_CLASS)
-                    a_tag = title_div.find_element(By.TAG_NAME, "a")
-                    href = a_tag.get_attribute("href")
+                    a_tag = article.find_element(By.CSS_SELECTOR, ".title a")
                     title = a_tag.text.strip() or f"Aktualizacja NFZ Centrala {date_text}"
+                    href = a_tag.get_attribute("href")
                     all_articles.append({
                         "date": article_date.strftime("%Y-%m-%d"),
                         "title": title,
@@ -54,6 +51,9 @@ def parse_nfz_centrala_articles():
                     })
                 except:
                     continue
+    except Exception as e:
+        print("❌ Błąd w NFZ Centrala:", e)
+        traceback.print_exc()
     finally:
         driver.quit()
     print(f"✅ NFZ Centrala: {len(all_articles)} artykułów")
@@ -61,23 +61,23 @@ def parse_nfz_centrala_articles():
 
 # ---------------- NFZ Oddziały ----------------
 def parse_nfz_oddzialy_articles():
+    print("▶ Pobieranie: NFZ Oddziały")
     url = "https://www.nfz.gov.pl/aktualnosci/aktualnosci-oddzialow/"
     driver = create_driver()
     articles = []
     try:
         driver.get(url)
-        WebDriverWait(driver, 15).until(
+        WebDriverWait(driver, 20).until(
             EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.padding-left-40"))
         )
-        time.sleep(3)
+        time.sleep(2)
         boxes = driver.find_elements(By.CSS_SELECTOR, "div.padding-left-40")
         for box in boxes:
             try:
-                link_element = box.find_element(By.CSS_SELECTOR, "h3.title a")
-                title = link_element.text.strip() or "Aktualizacja NFZ Oddziały"
-                href = link_element.get_attribute("href")
-                date_element = box.find_element(By.CSS_SELECTOR, "div.date")
-                date_str = date_element.text.strip()
+                title_el = box.find_element(By.CSS_SELECTOR, "h3.title a")
+                title = title_el.text.strip() or "Aktualizacja NFZ Oddziały"
+                href = title_el.get_attribute("href")
+                date_str = box.find_element(By.CSS_SELECTOR, "div.date").text.strip()
                 date_obj = datetime.strptime(date_str, "%d.%m.%Y").strftime("%Y-%m-%d")
                 articles.append({
                     "title": title,
@@ -87,6 +87,9 @@ def parse_nfz_oddzialy_articles():
                 })
             except:
                 continue
+    except Exception as e:
+        print("❌ Błąd w NFZ Oddziały:", e)
+        traceback.print_exc()
     finally:
         driver.quit()
     print(f"✅ NFZ Oddziały: {len(articles)} artykułów")
@@ -94,16 +97,17 @@ def parse_nfz_oddzialy_articles():
 
 # ---------------- gov.pl ----------------
 def get_recent_gov_mz_articles():
+    print("▶ Pobieranie: gov.pl")
     url = "https://www.gov.pl/web/zdrowie/wiadomosci"
     driver = create_driver()
     articles = []
     cutoff_date = datetime.today() - timedelta(days=9)
     try:
         driver.get(url)
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 20).until(
             EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul > li"))
         )
-        time.sleep(3)
+        time.sleep(2)
         li_elements = driver.find_elements(By.CSS_SELECTOR, "ul > li")
         for li in li_elements:
             try:
@@ -124,6 +128,9 @@ def get_recent_gov_mz_articles():
                     })
             except:
                 continue
+    except Exception as e:
+        print("❌ Błąd w gov.pl:", e)
+        traceback.print_exc()
     finally:
         driver.quit()
     print(f"✅ gov.pl: {len(articles)} artykułów")
@@ -131,15 +138,16 @@ def get_recent_gov_mz_articles():
 
 # ---------------- SerwisZOZ ----------------
 def parse_serwiszoz_articles():
+    print("▶ Pobieranie: SerwisZOZ")
     url = "https://serwiszoz.pl/aktualnosci-prawne-86"
     driver = create_driver()
     articles = []
     try:
         driver.get(url)
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 25).until(
             EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.item"))
         )
-        time.sleep(3)
+        time.sleep(2)
         elements = driver.find_elements(By.CSS_SELECTOR, "div.item")
         for element in elements:
             try:
@@ -160,6 +168,9 @@ def parse_serwiszoz_articles():
                 })
             except:
                 continue
+    except Exception as e:
+        print("❌ Błąd w SerwisZOZ:", e)
+        traceback.print_exc()
     finally:
         driver.quit()
     print(f"✅ SerwisZOZ: {len(articles)} artykułów")
@@ -167,15 +178,16 @@ def parse_serwiszoz_articles():
 
 # ---------------- Rynek Zdrowia ----------------
 def parse_rynekzdrowia_articles():
+    print("▶ Pobieranie: Rynek Zdrowia")
     driver = create_driver()
     base_url = "https://www.rynekzdrowia.pl/Aktualnosci/"
     articles = []
     try:
         driver.get(base_url)
-        WebDriverWait(driver, 15).until(
+        WebDriverWait(driver, 25).until(
             EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul.list-2 li"))
         )
-        time.sleep(3)
+        time.sleep(2)
         items = driver.find_elements(By.CSS_SELECTOR, "ul.list-2 li")
         for item in items:
             try:
@@ -190,6 +202,9 @@ def parse_rynekzdrowia_articles():
                 })
             except:
                 continue
+    except Exception as e:
+        print("❌ Błąd w Rynek Zdrowia:", e)
+        traceback.print_exc()
     finally:
         driver.quit()
     print(f"✅ Rynek Zdrowia: {len(articles)} artykułów")
@@ -197,12 +212,18 @@ def parse_rynekzdrowia_articles():
 
 # ---------------- Uruchomienie i zapis ----------------
 def run_all_parsers():
+    print("\n🛠️ Uruchamianie wszystkich parserów...")
     all_articles = []
-    all_articles += parse_nfz_centrala_articles()
-    all_articles += parse_nfz_oddzialy_articles()
-    all_articles += get_recent_gov_mz_articles()
-    all_articles += parse_serwiszoz_articles()
-    all_articles += parse_rynekzdrowia_articles()
+    try:
+        all_articles += parse_nfz_centrala_articles()
+        all_articles += parse_nfz_oddzialy_articles()
+        all_articles += get_recent_gov_mz_articles()
+        all_articles += parse_serwiszoz_articles()
+        all_articles += parse_rynekzdrowia_articles()
+    except Exception as e:
+        print("❌ Parser zgłosił wyjątek główny:", e)
+        traceback.print_exc()
+        raise
 
     # Deduplikacja po (title, url)
     seen = set()
