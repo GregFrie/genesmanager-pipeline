@@ -2,11 +2,16 @@ import os
 import json
 import time
 import requests
+import traceback
 from bs4 import BeautifulSoup
 from openai import OpenAI
 
+# Wymaga ustawionej zmiennej środowiskowej OPENAI_API_KEY
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# ─────────────────────────────────────────────
+# 🔹 Normalizacja tytułu po polsku
+# ─────────────────────────────────────────────
 def format_polish_title(raw_title: str) -> str:
     raw_title = raw_title.strip()
     if raw_title.lower().startswith("tytuł:"):
@@ -19,6 +24,9 @@ def format_polish_title(raw_title: str) -> str:
     words[0] = words[0].capitalize()
     return " ".join(words)
 
+# ─────────────────────────────────────────────
+# 🔹 Pobieranie treści artykułu ze strony źródłowej
+# ─────────────────────────────────────────────
 def extract_content_from_url(url):
     try:
         response = requests.get(url, timeout=10)
@@ -34,20 +42,30 @@ def extract_content_from_url(url):
         elif "nfz.gov.pl" in url:
             main = soup.find("div", class_="main-content") or soup.find("article")
         else:
-            main = soup.find("div", class_="content") or soup.find("div", class_="article-content") or soup.find("div", class_="entry-content")
+            main = soup.find("div", class_="content") \
+                   or soup.find("div", class_="article-content") \
+                   or soup.find("div", class_="entry-content")
 
         if not main:
             return ""
 
         paragraphs = main.find_all("p")
         return "\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+
     except Exception as e:
         print(f"❌ Błąd pobierania treści z URL: {url} → {e}")
+        traceback.print_exc()
         return ""
 
+# ─────────────────────────────────────────────
+# 🔹 Czyszczenie nazw plików
+# ─────────────────────────────────────────────
 def sanitize_filename(name):
     return "".join(c if c.isalnum() or c in " _-" else "_" for c in name).strip()[:60]
 
+# ─────────────────────────────────────────────
+# 🔹 Generowanie postów na podstawie listy artykułów
+# ─────────────────────────────────────────────
 def generate_posts(articles):
     output_dir = "output_posts"
     os.makedirs(output_dir, exist_ok=True)
@@ -100,3 +118,12 @@ def generate_posts(articles):
 
         except Exception as e:
             print(f"❌ Błąd przy generowaniu artykułu {i+1}: {e}")
+            traceback.print_exc()
+
+# Jeśli chcesz, żeby skrypt mógł być testowany samodzielnie:
+if __name__ == "__main__":
+    # Przykładowe dane testowe
+    test_articles = [
+        {"title": "Nowe wytyczne NFZ", "url": "https://www.gov.pl/web/zdrowie/wiadomosci", "lead": "NFZ opublikował nowe wytyczne", "source": "NFZ"},
+    ]
+    generate_posts(test_articles)
