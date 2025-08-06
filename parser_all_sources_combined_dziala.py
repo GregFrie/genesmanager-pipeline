@@ -10,7 +10,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 # ─────────────────────────────────────────────
-# 🚀 Pomocnicza funkcja do tworzenia drivera
+# 🚀 Funkcja pomocnicza do tworzenia drivera
 # ─────────────────────────────────────────────
 def create_driver():
     options = Options()
@@ -186,29 +186,68 @@ def parse_rynekzdrowia_articles():
     articles = []
     try:
         driver.get(base_url)
-        WebDriverWait(driver, 25).until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul.list-2 li"))
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul.list-2 li, ul.list-4 li, div.box-4"))
         )
         time.sleep(2)
-        items = driver.find_elements(By.CSS_SELECTOR, "ul.list-2 li")
+
+        # Zbierz wszystkie artykuły: główny box-4 + list-2 + list-4
+        items = driver.find_elements(By.CSS_SELECTOR, "div.box-4, ul.list-2 li, ul.list-4 li")
+
         for item in items:
             try:
-                title_element = item.find_element(By.CSS_SELECTOR, "div.desc > h3")
-                title = title_element.text.strip() or "Aktualizacja Rynek Zdrowia"
-                url = item.find_element(By.TAG_NAME, "a").get_attribute("href")
+                # Link do artykułu
+                link_el = item.find_element(By.TAG_NAME, "a")
+                url = link_el.get_attribute("href")
+                # Tytuł (h2/h3)
+                title_el = item.find_element(By.CSS_SELECTOR, "h2,h3")
+                title = title_el.text.strip()
+
+                if not url or not title:
+                    continue
+
+                # Lead = tytuł jako fallback
+                lead = title
+
+                # Pobierz krótki fragment treści z podstrony (pierwsze 2 akapity)
+                try:
+                    import requests
+                    from bs4 import BeautifulSoup
+
+                    resp = requests.get(url, timeout=10)
+                    resp.raise_for_status()
+                    soup = BeautifulSoup(resp.text, 'html.parser')
+
+                    # Szukamy w artykule akapitów
+                    article_tag = soup.find("article") or soup.find("div", class_="article") or soup
+                    paragraphs = article_tag.find_all("p")
+                    first_paras = [p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)][:2]
+
+                    if first_paras:
+                        lead = " ".join(first_paras)
+
+                except Exception as e:
+                    print(f"⚠️ Nie udało się pobrać treści z podstrony: {url} → {e}")
+
+                # Dodaj artykuł do listy wyników
                 articles.append({
                     "title": title,
                     "url": url,
-                    "source": "Rynek Zdrowia",
-                    "date": datetime.today().strftime("%Y-%m-%d")
+                    "lead": lead,
+                    "date": datetime.today().strftime("%Y-%m-%d"),
+                    "source": "Rynek Zdrowia"
                 })
-            except:
+
+            except Exception as e:
+                print(f"⚠️ Błąd przy przetwarzaniu artykułu Rynek Zdrowia: {e}")
                 continue
+
     except Exception as e:
         print("❌ Błąd w Rynek Zdrowia:", e)
         traceback.print_exc()
     finally:
         driver.quit()
+
     print(f"✅ Rynek Zdrowia: {len(articles)} artykułów")
     return articles
 
