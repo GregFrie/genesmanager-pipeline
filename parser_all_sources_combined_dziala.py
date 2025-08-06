@@ -160,7 +160,7 @@ def parse_serwiszoz_articles():
                     lead_elem = element.find_element(By.CSS_SELECTOR, "div.lead strong")
                     lead = lead_elem.text.strip()
                 except:
-                    lead = ""
+                    lead = title
                 articles.append({
                     "title": title,
                     "url": link,
@@ -168,7 +168,8 @@ def parse_serwiszoz_articles():
                     "date": datetime.today().strftime("%Y-%m-%d"),
                     "source": "SerwisZOZ"
                 })
-            except:
+            except Exception as e:
+                print(f"⚠️ Błąd przy przetwarzaniu SerwisZOZ: {e}")
                 continue
     except Exception as e:
         print("❌ Błąd w SerwisZOZ:", e)
@@ -191,45 +192,27 @@ def parse_rynekzdrowia_articles():
         )
         time.sleep(2)
 
-        # Zbierz wszystkie artykuły: główny box-4 + list-2 + list-4
         items = driver.find_elements(By.CSS_SELECTOR, "div.box-4, ul.list-2 li, ul.list-4 li")
 
         for item in items:
             try:
-                # Link do artykułu
                 link_el = item.find_element(By.TAG_NAME, "a")
                 url = link_el.get_attribute("href")
-                # Tytuł (h2/h3)
-                title_el = item.find_element(By.CSS_SELECTOR, "h2,h3")
-                title = title_el.text.strip()
 
-                if not url or not title:
-                    continue
+                # Tytuł z div.desc h3/h2 → fallback na a[title] → alt obrazka → domyślny
+                try:
+                    title_el = item.find_element(By.CSS_SELECTOR, "div.desc h3, div.desc h2")
+                    title = title_el.text.strip()
+                except:
+                    title = ""
 
-                # Lead = tytuł jako fallback
+                if not title:
+                    title = link_el.get_attribute("title") or \
+                            (item.find_element(By.CSS_SELECTOR, "img").get_attribute("alt") if item.find_elements(By.CSS_SELECTOR, "img") else "") or \
+                            "Aktualizacja Rynek Zdrowia"
+
                 lead = title
 
-                # Pobierz krótki fragment treści z podstrony (pierwsze 2 akapity)
-                try:
-                    import requests
-                    from bs4 import BeautifulSoup
-
-                    resp = requests.get(url, timeout=10)
-                    resp.raise_for_status()
-                    soup = BeautifulSoup(resp.text, 'html.parser')
-
-                    # Szukamy w artykule akapitów
-                    article_tag = soup.find("article") or soup.find("div", class_="article") or soup
-                    paragraphs = article_tag.find_all("p")
-                    first_paras = [p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)][:2]
-
-                    if first_paras:
-                        lead = " ".join(first_paras)
-
-                except Exception as e:
-                    print(f"⚠️ Nie udało się pobrać treści z podstrony: {url} → {e}")
-
-                # Dodaj artykuł do listy wyników
                 articles.append({
                     "title": title,
                     "url": url,
@@ -239,7 +222,7 @@ def parse_rynekzdrowia_articles():
                 })
 
             except Exception as e:
-                print(f"⚠️ Błąd przy przetwarzaniu artykułu Rynek Zdrowia: {e}")
+                print(f"⚠️ Błąd przy przetwarzaniu Rynek Zdrowia: {e}")
                 continue
 
     except Exception as e:
