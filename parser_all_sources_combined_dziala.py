@@ -8,9 +8,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import requests
+from bs4 import BeautifulSoup
 
 # ─────────────────────────────────────────────
-# 🚀 Funkcja pomocnicza do tworzenia drivera
+# 🚀 Pomocnicza funkcja do tworzenia drivera
 # ─────────────────────────────────────────────
 def create_driver():
     options = Options()
@@ -19,6 +21,46 @@ def create_driver():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-blink-features=AutomationControlled")
     return webdriver.Chrome(options=options)
+
+# ─────────────────────────────────────────────
+# 🔹 Funkcja fallback do pobrania statycznego HTML
+# ─────────────────────────────────────────────
+def fetch_static_html(url, css_selector, title_selector=None, lead_selector=None):
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        items = soup.select(css_selector)
+        results = []
+        for item in items:
+            try:
+                link_tag = item.select_one("a")
+                url_link = link_tag["href"] if link_tag else ""
+                if url_link and not url_link.startswith("http"):
+                    if "rynekzdrowia.pl" in url:
+                        url_link = "https://www.rynekzdrowia.pl" + url_link
+                    elif "serwiszoz.pl" in url:
+                        url_link = "https://serwiszoz.pl" + url_link
+
+                title_tag = item.select_one(title_selector) if title_selector else None
+                title = title_tag.get_text(strip=True) if title_tag else ""
+
+                lead_tag = item.select_one(lead_selector) if lead_selector else None
+                lead = lead_tag.get_text(strip=True) if lead_tag else title
+
+                results.append({
+                    "title": title or "Aktualizacja",
+                    "url": url_link,
+                    "lead": lead,
+                    "date": datetime.today().strftime("%Y-%m-%d"),
+                    "source": "Fallback"
+                })
+            except:
+                continue
+        return results
+    except Exception as e:
+        print(f"⚠️ Fallback HTML error for {url}: {e}")
+        return []
 
 # ---------------- NFZ Centrala ----------------
 def parse_nfz_centrala_articles():
@@ -138,7 +180,7 @@ def get_recent_gov_mz_articles():
     print(f"✅ gov.pl: {len(articles)} artykułów")
     return articles
 
-# ---------------- SerwisZOZ ----------------
+# ---------------- SerwisZOZ z fallback ----------------
 def parse_serwiszoz_articles():
     print("▶ Pobieranie: SerwisZOZ")
     url = "https://serwiszoz.pl/aktualnosci-prawne-86"
@@ -146,11 +188,19 @@ def parse_serwiszoz_articles():
     articles = []
     try:
         driver.get(url)
-        WebDriverWait(driver, 25).until(
+        WebDriverWait(driver, 40).until(
             EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.item"))
         )
         time.sleep(2)
+        # scroll + retry
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(2)
         elements = driver.find_elements(By.CSS_SELECTOR, "div.item")
+        if not elements:
+            driver.refresh()
+            time.sleep(3)
+            elements = driver.find_elements(By.CSS_SELECTOR, "div.item")
+
         for element in elements:
             try:
                 title_elem = element.find_element(By.CSS_SELECTOR, "div.item-title h2 a")
@@ -168,9 +218,13 @@ def parse_serwiszoz_articles():
                     "date": datetime.today().strftime("%Y-%m-%d"),
                     "source": "SerwisZOZ"
                 })
-            except Exception as e:
-                print(f"⚠️ Błąd przy przetwarzaniu SerwisZOZ: {e}")
+            except:
                 continue
+
+        if not articles:
+            print("⚠️ Selenium nie pobrał artykułów, używam fallback BeautifulSoup...")
+            articles = fetch_static_html(url, "div.item", "div.item-title h2 a", "div.lead strong")
+
     except Exception as e:
         print("❌ Błąd w SerwisZOZ:", e)
         traceback.print_exc()
@@ -182,55 +236,50 @@ def parse_serwiszoz_articles():
 # ---------------- Rynek Zdrowia ----------------
 def parse_rynekzdrowia_articles():
     print("▶ Pobieranie: Rynek Zdrowia")
+    url = "https://www.rynekzdrowia.pl/Aktualnosci/"
     driver = create_driver()
-    base_url = "https://www.rynekzdrowia.pl/Aktualnosci/"
     articles = []
     try:
-        driver.get(base_url)
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ul.list-2 li, ul.list-4 li, div.box-4"))
+        driver.get(url)
+        WebDriverWait(driver, 40).until(
+            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.box-4, ul.list-2 li, ul.list-4 li"))
         )
         time.sleep(2)
-
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(2)
         items = driver.find_elements(By.CSS_SELECTOR, "div.box-4, ul.list-2 li, ul.list-4 li")
-
         for item in items:
             try:
                 link_el = item.find_element(By.TAG_NAME, "a")
-                url = link_el.get_attribute("href")
+                url_link = link_el.get_attribute("href")
 
-                # Tytuł z div.desc h3/h2 → fallback na a[title] → alt obrazka → domyślny
                 try:
                     title_el = item.find_element(By.CSS_SELECTOR, "div.desc h3, div.desc h2")
                     title = title_el.text.strip()
                 except:
-                    title = ""
-
-                if not title:
                     title = link_el.get_attribute("title") or \
                             (item.find_element(By.CSS_SELECTOR, "img").get_attribute("alt") if item.find_elements(By.CSS_SELECTOR, "img") else "") or \
                             "Aktualizacja Rynek Zdrowia"
 
-                lead = title
-
                 articles.append({
                     "title": title,
-                    "url": url,
-                    "lead": lead,
+                    "url": url_link,
+                    "lead": title,
                     "date": datetime.today().strftime("%Y-%m-%d"),
                     "source": "Rynek Zdrowia"
                 })
-
-            except Exception as e:
-                print(f"⚠️ Błąd przy przetwarzaniu Rynek Zdrowia: {e}")
+            except:
                 continue
+
+        if not articles:
+            print("⚠️ Selenium nie pobrał artykułów Rynek Zdrowia, fallback HTML...")
+            articles = fetch_static_html(url, "div.box-4, ul.list-2 li, ul.list-4 li", "div.desc h3, div.desc h2", None)
 
     except Exception as e:
         print("❌ Błąd w Rynek Zdrowia:", e)
         traceback.print_exc()
     finally:
         driver.quit()
-
     print(f"✅ Rynek Zdrowia: {len(articles)} artykułów")
     return articles
 
