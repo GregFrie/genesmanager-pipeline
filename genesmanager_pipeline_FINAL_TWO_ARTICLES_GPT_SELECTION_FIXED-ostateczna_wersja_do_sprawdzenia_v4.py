@@ -9,6 +9,82 @@ import shutil
 import traceback
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+import time
+import json
+from datetime import datetime
+
+def accept_cookies(driver, selectors):
+    try:
+        for selector in selectors:
+            WebDriverWait(driver, 3).until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector))).click()
+            print(f"✅ Zaakceptowano cookies przez selektor: {selector}")
+            return
+    except:
+        print("ℹ️ Brak widocznego popupu z cookies (OK)")
+
+def parse_serwiszoz_articles():
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    driver = webdriver.Chrome(options=options)
+    driver.get("https://serwiszoz.pl/")
+    accept_cookies(driver, ["button.accept-cookie", "#cn-accept-cookie", ".cc-btn"])
+    WebDriverWait(driver, 15).until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.item")))
+    articles = driver.find_elements(By.CSS_SELECTOR, "div.item")
+    results = []
+    for article in articles:
+        try:
+            title = article.find_element(By.CSS_SELECTOR, "h2").text.strip()
+            url = article.find_element(By.CSS_SELECTOR, "a").get_attribute("href")
+            date = article.find_element(By.CSS_SELECTOR, "div.meta").text.strip()
+            results.append({
+                "title": title,
+                "url": url,
+                "source": "SerwisZOZ",
+                "date": date,
+                "content": ""  # Treść ładowana osobno
+            })
+        except Exception as e:
+            print(f"Błąd artykułu: {e}")
+    driver.quit()
+    return results
+
+def parse_rynekzdrowia_articles():
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    driver = webdriver.Chrome(options=options)
+    driver.get("https://www.rynekzdrowia.pl/")
+    accept_cookies(driver, ["button#didomi-notice-agree-button", ".cookie-accept", ".accept-cookies"])
+    articles = []
+    try:
+        WebDriverWait(driver, 15).until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "article")))
+        for el in driver.find_elements(By.CSS_SELECTOR, "article"):
+            try:
+                a = el.find_element(By.TAG_NAME, "a")
+                href = a.get_attribute("href")
+                title = a.text.strip()
+                articles.append({
+                    "title": title,
+                    "url": href,
+                    "source": "Rynek Zdrowia",
+                    "date": str(datetime.today().date()),
+                    "content": ""
+                })
+            except:
+                continue
+    finally:
+        driver.quit()
+    return articles
+
+# Inne funkcje parsujące niezmienione (NFZ, gov.pl itd.)
+# Kod główny uruchamiający wszystko też niezmieniony
+
 from pathlib import Path
 from openai import OpenAI
 
