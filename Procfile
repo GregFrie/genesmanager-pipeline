@@ -1,0 +1,1 @@
+worker: python genesmanager_pipeline_FINAL_TWO_ARTICLES_GPT_SELECTION_FIXED-ostateczna_wersja_do_sprawdzenia_v4.py
