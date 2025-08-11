@@ -4,10 +4,11 @@ import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# NEW:
+# Requests/BS4
 import requests
 from bs4 import BeautifulSoup
 
+# Selenium
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
@@ -143,17 +144,32 @@ def get_recent_gov_mz_articles():
     print(f"✅ gov.pl: {len(articles)} artykułów")
     return articles
 
-# ---------------- SerwisZOZ (REQ+BS4) ----------------
+# ---------------- SerwisZOZ (Session headers + fallback Selenium) ----------------
 def parse_serwiszoz_articles():
     print("▶ Pobieranie: SerwisZOZ")
     url = "https://serwiszoz.pl/aktualnosci-prawne-86"
     articles = []
+
+    # 1) Requests.Session z pełnymi nagłówkami
     try:
-        r = requests.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        for element in soup.select("div.item"):
-            try:
+        sess = requests.Session()
+        sess.headers.update({
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/124.0.0.0 Safari/537.36"),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://serwiszoz.pl/",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Upgrade-Insecure-Requests": "1",
+            "DNT": "1",
+            "Connection": "keep-alive",
+        })
+        r = sess.get(url, timeout=25, allow_redirects=True)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, "html.parser")
+            for element in soup.select("div.item"):
                 a = element.select_one("div.item-title h2 a")
                 if not a:
                     continue
@@ -168,13 +184,69 @@ def parse_serwiszoz_articles():
                     "date": datetime.today().strftime("%Y-%m-%d"),
                     "source": "SerwisZOZ"
                 })
-            except Exception as e:
-                print(f"⚠️ Błąd przy elemencie SerwisZOZ: {e}")
+            print(f"✅ SerwisZOZ (requests): {len(articles)} artykułów")
+            return articles
+        else:
+            print(f"⚠️ SerwisZOZ (requests) status: {r.status_code} – fallback Selenium")
+    except Exception as e:
+        print(f"⚠️ Błąd w SerwisZOZ (requests): {e} – fallback Selenium")
+
+    # 2) Fallback: Selenium
+    driver = None
+    try:
+        driver = create_driver()
+        driver.get(url)
+
+        # ewentualny baner cookies
+        try:
+            for sel in ["button#onetrust-accept-btn-handler",
+                        "button.cookie-accept",
+                        "button[aria-label*='zgadzam']",
+                        "button[aria-label*='akcept']"]:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                if els:
+                    els[0].click()
+                    time.sleep(1)
+                    break
+        except:
+            pass
+
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_any_elements_located((By.CSS_SELECTOR, "div.item, div.blog-item, article"))
+        )
+        time.sleep(2)
+        items = driver.find_elements(By.CSS_SELECTOR, "div.item, div.blog-item, article")
+        for it in items:
+            try:
+                a = None
+                for css in ["div.item-title h2 a", "h2 a", "a"]:
+                    cand = it.find_elements(By.CSS_SELECTOR, css)
+                    if cand:
+                        a = cand[0]; break
+                if not a:
+                    continue
+                title = (a.text or "").strip() or "Aktualizacja SerwisZOZ"
+                link = a.get_attribute("href") or ""
+                lead = title
+                articles.append({
+                    "title": title,
+                    "url": link,
+                    "lead": lead,
+                    "date": datetime.today().strftime("%Y-%m-%d"),
+                    "source": "SerwisZOZ"
+                })
+            except Exception:
                 continue
     except Exception as e:
-        print("❌ Błąd w SerwisZOZ:", e)
-        traceback.print_exc()
-    print(f"✅ SerwisZOZ: {len(articles)} artykułów")
+        print(f"❌ Błąd w SerwisZOZ (Selenium): {e}")
+    finally:
+        try:
+            if driver:
+                driver.quit()
+        except:
+            pass
+
+    print(f"✅ SerwisZOZ (fallback Selenium): {len(articles)} artykułów")
     return articles
 
 # ---------------- Rynek Zdrowia ----------------
@@ -230,12 +302,11 @@ def run_all_parsers():
         all_articles += parse_nfz_centrala_articles()
         all_articles += parse_nfz_oddzialy_articles()
         all_articles += get_recent_gov_mz_articles()
-        all_articles += parse_serwiszoz_articles()   # już BS4
+        all_articles += parse_serwiszoz_articles()
         all_articles += parse_rynekzdrowia_articles()
     except Exception as e:
         print("❌ Parser zgłosił wyjątek główny:", e)
         traceback.print_exc()
-        # nie przerywamy – zapisujemy co się udało
 
     # Deduplikacja po (title, url)
     seen = set()
