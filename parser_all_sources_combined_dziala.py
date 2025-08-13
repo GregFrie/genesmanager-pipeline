@@ -24,6 +24,7 @@ def create_driver():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--remote-allow-origins=*")
     return webdriver.Chrome(options=options)
 
 # ---------------- NFZ Centrala ----------------
@@ -150,7 +151,7 @@ def parse_serwiszoz_articles():
     url = "https://serwiszoz.pl/aktualnosci-prawne-86"
     articles = []
 
-    # 1) Requests.Session z pełnymi nagłówkami
+    # 1) Requests.Session z pełnymi nagłówkami (próba obejścia 403)
     try:
         sess = requests.Session()
         sess.headers.update({
@@ -191,7 +192,7 @@ def parse_serwiszoz_articles():
     except Exception as e:
         print(f"⚠️ Błąd w SerwisZOZ (requests): {e} – fallback Selenium")
 
-    # 2) Fallback: Selenium
+    # 2) Fallback: Selenium (naprawione EC)
     driver = None
     try:
         driver = create_driver()
@@ -211,10 +212,12 @@ def parse_serwiszoz_articles():
         except:
             pass
 
+        # ⬇️ poprawka: presence_of_element_located (nie ma presence_of_any_elements_located)
         WebDriverWait(driver, 30).until(
-            EC.presence_of_any_elements_located((By.CSS_SELECTOR, "div.item, div.blog-item, article"))
+            EC.presence_of_element_located((By.CSS_SELECTOR, "div.item, div.blog-item, article"))
         )
         time.sleep(2)
+
         items = driver.find_elements(By.CSS_SELECTOR, "div.item, div.blog-item, article")
         for it in items:
             try:
@@ -302,7 +305,7 @@ def run_all_parsers():
         all_articles += parse_nfz_centrala_articles()
         all_articles += parse_nfz_oddzialy_articles()
         all_articles += get_recent_gov_mz_articles()
-        all_articles += parse_serwiszoz_articles()
+        all_articles += parse_serwiszoz_articles()   # requests + fallback Selenium
         all_articles += parse_rynekzdrowia_articles()
     except Exception as e:
         print("❌ Parser zgłosił wyjątek główny:", e)
