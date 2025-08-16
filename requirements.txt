@@ -1,5 +1,0 @@
-requests
-beautifulsoup4
-selenium
-python-dotenv
-openai>=1.0.0
