@@ -1,99 +1,61 @@
 import os
-import json
 import time
-import requests
-from bs4 import BeautifulSoup
-from openai import OpenAI
+import json
+from pathlib import Path
+from dotenv import load_dotenv
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+load_dotenv("bot.env")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+client = OpenAI(api_key=OPENAI_API_KEY) if (OpenAI and OPENAI_API_KEY) else None
 
-def extract_content_from_url(url):
-    try:
-        response = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        if "gov.pl" in url:
-            main = soup.find("div", class_="editor-content")
-        elif "serwiszoz.pl" in url:
-            main = soup.find("div", class_="blog-content")
-        elif "rynekzdrowia.pl" in url:
-            main = soup.find("article")
-        elif "nfz.gov.pl" in url:
-            main = soup.find("div", class_="main-content") or soup.find("article")
-        else:
-            main = soup.find("div", class_="content") or soup.find("div", class_="article-content") or soup.find("div", class_="entry-content")
-
-        if not main:
-            return ""
-
-        paragraphs = main.find_all("p")
-        return "\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
-    except Exception as e:
-        print(f"❌ Błąd pobierania treści z URL: {url} → {e}")
-        return ""
-
-def sanitize_filename(name):
-    return "".join(c if c.isalnum() or c in " _-" else "_" for c in name).strip()[:60]
-
-def normalize_title(title):
-    title = (title or "").strip()
-    if title.lower().startswith("tytuł"):
-        title = title.split(":", 1)[-1].strip()
-    if not title:
-        return "Aktualność – GenesManager"
-    return title[:140].strip().capitalize()
+OUTPUT_DIR = Path("output_posts")
+OUTPUT_DIR.mkdir(exist_ok=True)
 
 def generate_posts(articles):
-    output_dir = "output_posts"
-    os.makedirs(output_dir, exist_ok=True)
-    processed_urls = set()
+    for idx, art in enumerate(articles, 1):
+        title = art.get("title", f"Aktualność {idx}")
+        lead = art.get("lead", "")
+        url = art.get("url", "")
 
-    for i, article in enumerate(articles, 1):
-        try:
-            url = (article.get("url") or "").strip()
-            if not url or url in processed_urls:
+        prompt = f"""
+Jesteś ekspertem ds. ochrony zdrowia i redaktorem. 
+Napisz artykuł na stronę dla managerów placówek medycznych.
+Na podstawie informacji:
+Tytuł: {title}
+Lead: {lead}
+Źródło: {url}
+
+Założenia:
+- Profesjonalny, ekspercki styl.
+- Struktura: nagłówek H1 = tytuł, potem śródtytuły H4, akapity.
+- Minimum 3000 znaków.
+- Zoptymalizowany pod SEO.
+"""
+
+        content = ""
+        if client:
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-5",  # użycie GPT-5
+                    messages=[
+                        {"role": "system", "content": "Jesteś ekspertem ds. ochrony zdrowia i redaktorem SEO."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.4
+                )
+                content = response.choices[0].message.content.strip()
+            except Exception as e:
+                print(f"⚠️ Błąd AI dla '{title}': {e}")
                 continue
-            processed_urls.add(url)
 
-            raw_title = article.get("title") or article.get("lead") or f"Aktualność {article.get('source','') or ''} {article.get('date','') or ''}".strip()
-            title = normalize_title(raw_title)
+        if not content:
+            content = f"# {title}\n\n{lead}\n\n(Brak treści – fallback)"
 
-            lead = (article.get("lead") or "").strip()
-            content = extract_content_from_url(url)
-            if not content and lead:
-                content = lead
-            if not content:
-                print(f"⚠️ Pominięto artykuł {i} – brak treści z URL i LEAD")
-                continue
-
-            prompt = (
-                "Napisz ekspercki, ale przystępny artykuł blogowy na podstawie poniższego tekstu źródłowego. "
-                "Artykuł ma być unikalny, inspirowany treścią, ale nie może jej kopiować. "
-                "Ma być przeznaczony dla właścicieli i managerów podmiotów medycznych.\n\n"
-                f"{content}"
-            )
-
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "Jesteś doświadczonym redaktorem medycznym."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7
-            )
-
-            final_text = response.choices[0].message.content.strip() if response.choices else "⚠️ Brak odpowiedzi od modelu"
-
-            filename_base = sanitize_filename(title if title else "bez_tytulu")
-            filename = f"{i:03d}_{filename_base}.txt"
-            output_path = os.path.join(output_dir, filename)
-
-            with open(output_path, "w", encoding="utf-8") as out_f:
-                out_f.write(title + "\n\n" + final_text)
-
-            print(f"✅ Wygenerowano: {filename}")
-            time.sleep(1.0)
-
-        except Exception as e:
-            print(f"❌ Błąd przy generowaniu artykułu {i}: {e}")
+        filename = OUTPUT_DIR / f"{idx:03d}_{title.replace(' ','_')[:60]}.txt"
+        with filename.open("w", encoding="utf-8") as f:
+            f.write(f"# {title}\n\n{content}")
+        print(f"✅ Wygenerowano: {filename.name}")
