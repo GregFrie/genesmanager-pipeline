@@ -7,6 +7,7 @@ import time
 import subprocess
 import requests
 import shutil
+import re
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
@@ -21,6 +22,10 @@ except Exception:
 load_dotenv("bot.env")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 client = OpenAI(api_key=OPENAI_API_KEY) if (OpenAI and OPENAI_API_KEY) else None
+
+# modele
+PRIMARY_MODEL = "gpt-5"       # bez parametru temperature!
+FALLBACK_MODEL = "gpt-4o-mini"  # fallback (tu możemy dać temperature)
 
 WP_URL = (os.getenv("WP_URL") or "").rstrip("/")
 WP_USER = os.getenv("WP_USER", "")
@@ -60,8 +65,45 @@ def _safe_title(a):
 def _safe_lead(a):
     return (a.get("lead") or a.get("title") or "").strip()
 
+def _strip_code_fences(s: str) -> str:
+    if not s:
+        return s
+    s = s.strip()
+    # usuń ```json ... ``` lub ``` ... ```
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s)
+    return s.strip()
+
+def _try_parse_indices(s: str, max_n: int):
+    """
+    Spróbuj sparsować listę indeksów z tekstu s do listy int (1‑indeksowane).
+    Dodatkowe bezpieczeństwo na wypadek spacji/nowych linii.
+    """
+    s = _strip_code_fences(s)
+    try:
+        data = json.loads(s)
+        if isinstance(data, list):
+            out = []
+            for x in data:
+                try:
+                    i = int(x)
+                    if 1 <= i <= max_n:
+                        out.append(i)
+                except Exception:
+                    continue
+            return out
+    except Exception:
+        pass
+    # heurystyka: wyciągnij liczby z nawiasów kwadratowych
+    m = re.search(r"\[(.*?)\]", s)
+    if m:
+        nums = re.findall(r"\d+", m.group(1))
+        return [int(x) for x in nums if 1 <= int(x) <= max_n]
+    return []
+
 # ─────────────────────────────────────────────
-# 🧠 2. Wybór artykułów przez GPT-5
+# 🧠 2. Wybór artykułów przez GPT-5 (+ fallback)
 # ─────────────────────────────────────────────
 def pick_most_relevant_articles(all_articles, n=2, retries=2):
     recent_articles = [a for a in all_articles if is_recent(a.get("date", ""))]
@@ -77,47 +119,58 @@ def pick_most_relevant_articles(all_articles, n=2, retries=2):
     if len(unpub) <= n:
         return unpub
 
-    for attempt in range(retries):
-        prompt = (
-            "Jesteś doświadczonym redaktorem medycznym. Spośród poniższych artykułów wybierz dokładnie 2, "
-            "które są najważniejsze dla właścicieli i managerów placówek medycznych. "
-            "Priorytet: 1) konkursy NFZ, 2) zmiany w przepisach (NFZ, MZ, RCL). "
-            "Podaj tylko numery w JSON, np. [1, 4]\n\n"
-        )
-        for i, a in enumerate(unpub, 1):
-            prompt += f"{i}. {a['title']} — {a.get('lead','')}\n"
+    base_prompt = (
+        "Jesteś doświadczonym redaktorem medycznym. Spośród poniższych artykułów wybierz dokładnie 2, "
+        "które są najważniejsze dla właścicieli i managerów placówek medycznych. "
+        "Priorytet: 1) konkursy NFZ, 2) zmiany w przepisach (NFZ, MZ, RCL). "
+        "Podaj tylko numery w JSON, np. [1, 4]\n\n"
+    )
 
-        print("\n📋 Artykuły kandydujące:", len(unpub))
-        for i, a in enumerate(unpub, 1):
-            print(f"{i}. {a['title']}")
+    listing = ""
+    for i, a in enumerate(unpub, 1):
+        listing += f"{i}. {a['title']} — {a.get('lead','')}\n"
 
-        try:
-            if client is None:
-                raise RuntimeError("Brak klienta OpenAI (OPENAI_API_KEY?)")
-            response = client.chat.completions.create(
-                model="gpt-5",  # ⬅️ zmiana na GPT-5
-                messages=[
-                    {"role": "system", "content": "Jesteś doświadczonym redaktorem medycznym."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.0
+    messages = [
+        {"role": "system", "content": "Jesteś doświadczonym redaktorem medycznym."},
+        {"role": "user", "content": base_prompt + listing}
+    ]
+
+    def _ask_ai(use_primary=True):
+        if client is None:
+            raise RuntimeError("Brak klienta OpenAI (OPENAI_API_KEY?)")
+        if use_primary:
+            # GPT-5 — bez temperature
+            resp = client.chat.completions.create(
+                model=PRIMARY_MODEL,
+                messages=messages
             )
-            content = response.choices[0].message.content.strip() if response.choices else ""
+        else:
+            # fallback: gpt-4o-mini — możemy użyć niskiej temperatury
+            resp = client.chat.completions.create(
+                model=FALLBACK_MODEL,
+                messages=messages,
+                temperature=0.2
+            )
+        return (resp.choices[0].message.content or "").strip()
+
+    print("\n📋 Artykuły kandydujące:", len(unpub))
+    for i, a in enumerate(unpub, 1):
+        print(f"{i}. {a['title']}")
+
+    for attempt in range(retries):
+        try:
+            use_primary = (attempt == 0)
+            content = _ask_ai(use_primary=use_primary)
             print(f"🔹 Debug GPT response (attempt {attempt+1}): {repr(content)}")
-            if not content:
-                time.sleep(2)
-                continue
-            try:
-                indices = json.loads(content.replace("```json","").replace("```","").strip())
-                chosen = [unpub[i - 1] for i in indices if 0 < i <= len(unpub)]
+            idxs = _try_parse_indices(content, max_n=len(unpub))
+            if idxs:
+                chosen = [unpub[i - 1] for i in idxs][:n]
                 if chosen:
-                    return chosen[:n]
-            except json.JSONDecodeError:
-                print("⚠️ JSON parsing fail, retry…")
-                time.sleep(2)
+                    return chosen
         except Exception as e:
-            print(f"⚠️ AI error (attempt {attempt+1}): {e}")
-            time.sleep(2)
+            which = PRIMARY_MODEL if attempt == 0 else FALLBACK_MODEL
+            print(f"⚠️ AI error (attempt {attempt+1}, {which}): {e}")
+            time.sleep(1.0)
 
     print("⚠️ Fallback → wybieram pierwsze 2")
     return unpub[:n]
@@ -128,7 +181,7 @@ def pick_most_relevant_articles(all_articles, n=2, retries=2):
 from genesmanager_generate_posts_from_json_dziala import generate_posts
 
 # ─────────────────────────────────────────────
-# 🌐 4. Publikacja na WordPress
+# 🌐 4. Publikacja na WordPress (z 415‑proof fallback)
 # ─────────────────────────────────────────────
 def extract_title_and_body(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
@@ -151,17 +204,55 @@ def publish_to_wordpress():
         print("⚠️ Brak konfiguracji WP_URL/WP_USER/WP_APP_PASSWORD")
         return
 
-    headers = {"Accept":"application/json","Content-Type":"application/json; charset=UTF-8","User-Agent":"GenesManager/1.0"}
+    headers_json = {
+        "Accept": "application/json",
+        "Content-Type": "application/json; charset=UTF-8",
+        "User-Agent": "GenesManager/1.0",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+    headers_form = {
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": "GenesManager/1.0",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+
+    def _post_with_fallback(payload):
+        # 1) klasyczny JSON
+        resp = requests.post(API_ENDPOINT, auth=AUTH, headers=headers_json, json=payload, timeout=30)
+        if resp.status_code == 201:
+            return resp
+
+        # 2) raw JSON w body
+        if resp.status_code in (400, 403, 404, 406, 415, 500):
+            resp2 = requests.post(
+                API_ENDPOINT, auth=AUTH, headers=headers_json,
+                data=json.dumps(payload).encode("utf-8"), timeout=30
+            )
+            if resp2.status_code == 201:
+                return resp2
+
+            # 3) application/x-www-form-urlencoded
+            resp3 = requests.post(
+                API_ENDPOINT, auth=AUTH, headers=headers_form,
+                data={"title": payload["title"], "content": payload["content"], "status": payload["status"]},
+                timeout=30
+            )
+            return resp3
+        return resp
 
     for file in sorted(POST_DIR.glob("*.txt")):
         title, body = extract_title_and_body(file)
         if title and body:
             payload = {"title": title, "content": body, "status": "publish"}
-            resp = requests.post(API_ENDPOINT, auth=AUTH, headers=headers, json=payload, timeout=30)
+            resp = _post_with_fallback(payload)
             if resp.status_code == 201:
                 print(f"✅ Opublikowano: {title}")
             else:
-                print(f"❌ Błąd {title}: {resp.status_code} {resp.text[:200]}")
+                preview = (resp.text or "")[:600].replace("\n", " ")
+                print(f"❌ Błąd {title}: {resp.status_code} – {preview}")
         else:
             print(f"⚠️ Pominięto plik: {file.name}")
 
