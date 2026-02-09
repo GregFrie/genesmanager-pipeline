@@ -1,58 +1,62 @@
 import os
 import re
 import time
-import json
 from pathlib import Path
 from dotenv import load_dotenv
+
 try:
     from openai import OpenAI
 except Exception:
     OpenAI = None
 
+# ─────────────────────────────────────────────
+# KONFIG
+# ─────────────────────────────────────────────
 load_dotenv("bot.env")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 client = OpenAI(api_key=OPENAI_API_KEY) if (OpenAI and OPENAI_API_KEY) else None
 
 OUTPUT_DIR = Path("output_posts")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-PRIMARY_MODEL = "gpt-5"         # użyjemy bez param. temperature
+PRIMARY_MODEL = "gpt-5"         # bez param. temperature
 FALLBACK_MODEL = "gpt-4o-mini"  # fallback z temperature
 
+GENESMANAGER_LINKS = [
+    ("Audyty dla podmiotów leczniczych", "https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/"),
+    ("Rejestracja podmiotu leczniczego", "https://genesmanager.pl/rejestracja-podmiotu-leczniczego/"),
+    ("Przygotowanie oferty konkursowej do NFZ", "https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/"),
+    ("Rozliczenia z NFZ", "https://genesmanager.pl/rozliczenia-z-nfz/"),
+]
+
+# ─────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────
 def _clean_fences(text: str) -> str:
+    """Usuń ```...``` jeśli model je jednak zwróci."""
     if not text:
         return text
     t = text.strip()
     if t.startswith("```"):
-        # usuń ```lang\n ... \n```
-        t = t.strip("`")
-        if "\n" in t:
-            t = t.split("\n", 1)[1]
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t)
     return t.strip()
 
 def _safe_filename(s: str, maxlen: int = 80) -> str:
-    # zamień spacje na _, usuń znaki niebezpieczne
-    s = s.strip().replace(" ", "_")
+    s = (s or "").strip().replace(" ", "_")
     s = re.sub(r"[^A-Za-z0-9_\-]", "", s)
     return s[:maxlen] if len(s) > maxlen else s
 
-def _call_openai(messages, use_primary=True):
-    """
-    Zwraca content jako string.
-    - gpt-5: bez temperature
-    - fallback gpt-4o-mini: temperature=0.2
-    """
+def _call_openai(messages, use_primary=True) -> str:
     if client is None:
         raise RuntimeError("Brak klienta OpenAI (OPENAI_API_KEY lub biblioteka)")
 
     if use_primary:
-        # GPT-5 – bez temperature (wymóg API)
         resp = client.chat.completions.create(
             model=PRIMARY_MODEL,
             messages=messages
         )
     else:
-        # fallback – gpt-4o-mini z łagodną temperaturą
         resp = client.chat.completions.create(
             model=FALLBACK_MODEL,
             messages=messages,
@@ -60,107 +64,174 @@ def _call_openai(messages, use_primary=True):
         )
     return (resp.choices[0].message.content or "").strip()
 
+def _strip_h1_if_model_added(html: str) -> str:
+    """Jeśli model dodał <h1>...</h1>, usuń je, bo my kontrolujemy H1."""
+    if not html:
+        return html
+    # usuń pierwszy nagłówek h1 (tylko pierwszy)
+    return re.sub(r"(?is)^\s*<h1[^>]*>.*?</h1>\s*", "", html, count=1).strip()
+
+def _ensure_has_h1(title: str, html: str) -> str:
+    """Zawsze na początku ma być <h1>Title</h1>."""
+    html = (html or "").strip()
+    if re.search(r"(?is)^\s*<h1[^>]*>.*?</h1>", html):
+        return html
+    return f"<h1>{_escape_html(title)}</h1>\n{html}"
+
+def _escape_html(s: str) -> str:
+    """Minimalne escapowanie na wypadek znaków specjalnych w tytule."""
+    if s is None:
+        return ""
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;"))
+
+def _soft_sanitize(html: str) -> str:
+    """
+    Minimalne sprzątanie:
+    - usuń pozostałości markdowna (#, **, ```), jeśli się pojawią
+    - zamień podwójne nowe linie na jeden odstęp (HTML i tak ogarnia)
+    """
+    if not html:
+        return html
+    h = html
+
+    # usuń fences
+    h = _clean_fences(h)
+
+    # usuń przypadkowe markdown H2/H3
+    h = re.sub(r"(?m)^\s*#{1,6}\s+", "", h)
+
+    # usuń **bold** jeśli się pojawi
+    h = re.sub(r"\*\*(.+?)\*\*", r"\1", h)
+
+    # czasem model wstawi "- " zamiast <li> — zostawiamy, ale lekko redukujemy szkody:
+    # (nie próbujemy automatycznie konwertować do HTML, bo to robi prompt)
+    h = re.sub(r"\n{3,}", "\n\n", h)
+
+    return h.strip()
+
+# ─────────────────────────────────────────────
+# PROMPT
+# ─────────────────────────────────────────────
 def _compose_prompt(title: str, lead: str, url: str) -> str:
+    # UWAGA: wymuszamy HTML + zakaz markdowna
     return f"""
-Jesteś ekspertem ds. ochrony zdrowia i redaktorem medycznym GenesManager.pl
-Napisz artykuł na stronę dla managerów placówek medycznych.
+Jesteś ekspertem ds. ochrony zdrowia i redaktorem GenesManager.pl.
+Napisz ekspercki, bardzo czytelny artykuł dla właścicieli i managerów placówek medycznych.
 
 Dane wejściowe:
 - Tytuł: {title}
 - Lead: {lead}
 - Źródło: {url}
 
-Wymagania:
+WYMAGANIA FORMATU (krytyczne):
+- Zwróć WYŁĄCZNIE czysty HTML do WordPressa.
+- NIE używaj Markdowna: żadnych #, ##, **, list z myślnikami.
+- Używaj wyłącznie tagów: <h2>, <h3>, <p>, <ul>, <li>, <strong>, <a>.
+- Linki podawaj jako <a href="...">tekst</a>.
+- Zero bloków ```.
+
+WYMAGANIA MERYTORYCZNE:
 - Styl: profesjonalny, ekspercki, merytoryczny – bez clickbaitu.
-- Struktura: H1 = tytuł (jedna linia), następnie śródtytuły H4 i akapity.
-- Minimum 3000 znaków (nie krócej).
-- Dodaj sekcję „Dlaczego to ważne dla placówek” oraz „Co zrobić teraz (checklista)”.
-- SEO: zwięzły lead (1–2 zdania), śródtytuły zawierają słowa kluczowe z tematu.
-- Jeśli źródło jest ogólne, nie zmyślaj liczb – pisz ostrożnie i zaznacz brak pełnych danych.
-Output w czystym Markdown (bez bloków ```).
-STRUKTURA (dokładnie w tej kolejności):
-# {title}
+- Minimum 3000 znaków.
+- Krótkie akapity (1–3 zdania), dużo „powietrza”.
+- Jeśli źródło jest ogólne: nie zmyślaj liczb; pisz ostrożnie.
 
-**Lead (1–2 zdania):** krótkie streszczenie.
+STRUKTURA (w tej kolejności, z zachowaniem nagłówków):
+<h2>Lead</h2>
+<p><strong>Lead (1–2 zdania):</strong> krótkie streszczenie tematu.</p>
 
-## Najważniejsze wnioski (TL;DR)
-- 4–6 punktów, zwięzłe, konkretne.
+<h2>Najważniejsze wnioski (TL;DR)</h2>
+<ul>
+  <li>4–6 krótkich punktów.</li>
+</ul>
 
-## Co się zmienia / czego dotyczy informacja
-Wyjaśnij temat i kontekst (bez lania wody).
+<h2>Co się zmienia / czego dotyczy informacja</h2>
+<p>Kontekst i zakres.</p>
 
-## Kogo to dotyczy w praktyce
-Podziel na: POZ / AOS / Szpital / inne (jeśli pasuje).
+<h2>Kogo to dotyczy w praktyce</h2>
+<ul>
+  <li><strong>POZ:</strong> …</li>
+  <li><strong>AOS:</strong> …</li>
+  <li><strong>Szpital:</strong> …</li>
+</ul>
 
-## Ryzyka i najczęstsze błędy (jesli pasuje)
-Lista + krótkie wyjaśnienia.
+<h2>Ryzyka i najczęstsze błędy</h2>
+<ul>
+  <li>Lista + krótkie objaśnienia.</li>
+</ul>
 
-## Co to oznacza dla rozliczeń i dokumentacji (jesli pasuje)
-Konkrety: sprawozdawczość, terminy, organizacja pracy.
+<h2>Co to oznacza dla rozliczeń i dokumentacji</h2>
+<p>Konkrety: sprawozdawczość / organizacja pracy / terminy.</p>
 
-## Dlaczego to ważne dla placówek
-Sekcja obowiązkowa – praktyczne uzasadnienie.
+<h2>Dlaczego to ważne dla placówek</h2>
+<p>Sekcja obowiązkowa – praktyczne uzasadnienie.</p>
 
-## Co zrobić teraz (checklista) (jesli pasuje)
-- 5–10 punktów do odhaczenia.
+<h2>Co zrobić teraz (checklista)</h2>
+<ul>
+  <li>8–12 punktów do odhaczenia.</li>
+</ul>
 
-## Jak GenesManager może pomóc (wstaw linki kontekstowo)
-W tej sekcji wstaw NATURALNIE maksymalnie 2 linki (Markdown):
-- Audyty: https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/
-- Rejestracja podmiotu: https://genesmanager.pl/rejestracja-podmiotu-leczniczego/
-- Oferta konkursowa NFZ: https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/
-- Rozliczenia z NFZ: https://genesmanager.pl/rozliczenia-z-nfz/
-Zasady linkowania:
-- Tylko tam, gdzie temat pasuje (np. kontrola/ryzyko -> audyt; sprawozdawczość -> rozliczenia; konkurs -> oferta; formalności -> rejestracja).
-- Nie wstawiaj 2 linków do tej samej usługi.
-- Nie wstawiaj linków w każdym akapicie.
+<h2>Jak GenesManager może pomóc</h2>
+<p>Napisz 3–6 zdań i wstaw naturalnie maksymalnie 2 linki (HTML) do usług – tylko jeśli pasują tematycznie:</p>
+<ul>
+  <li>Audyty: <a href="https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/">Audyty dla podmiotów leczniczych</a></li>
+  <li>Rejestracja: <a href="https://genesmanager.pl/rejestracja-podmiotu-leczniczego/">Rejestracja podmiotu leczniczego</a></li>
+  <li>Konkurs NFZ: <a href="https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/">Przygotowanie oferty konkursowej do NFZ</a></li>
+  <li>Rozliczenia NFZ: <a href="https://genesmanager.pl/rozliczenia-z-nfz/">Rozliczenia z NFZ</a></li>
+</ul>
 
-## Źródło
-Podaj link do źródła: {url}
-"""
+<h2>Źródło</h2>
+<p><a href="{url}">{url}</a></p>
+
+Zwróć sam HTML (bez komentarzy).
+""".strip()
+
+# ─────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────
 def generate_posts(articles):
     for idx, art in enumerate(articles, 1):
-        title = art.get("title", f"Aktualność {idx}").strip()
-        lead = art.get("lead", "").strip()
-        url = art.get("url", "").strip()
+        title = (art.get("title") or f"Aktualność {idx}").strip()
+        lead = (art.get("lead") or "").strip()
+        url = (art.get("url") or "").strip()
 
         messages = [
-            {"role": "system", "content": "Jesteś ekspertem ds. ochrony zdrowia i redaktorem SEO."},
+            {"role": "system", "content": "Jesteś ekspertem ds. ochrony zdrowia i redaktorem SEO dla GenesManager.pl."},
             {"role": "user", "content": _compose_prompt(title, lead, url)}
         ]
 
-        content = ""
-        # 2 próby: 1) gpt-5, 2) fallback
+        html = ""
         for attempt in range(2):
             try:
                 use_primary = (attempt == 0)
                 txt = _call_openai(messages, use_primary=use_primary)
-                txt = _clean_fences(txt)
-                content = txt
+                html = _clean_fences(txt)
                 break
             except Exception as e:
                 model_name = PRIMARY_MODEL if attempt == 0 else FALLBACK_MODEL
-                print(f"⚠️ Błąd AI ({model_name}) dla '{title}': {e}")
+                print(f"⚠️ Błąd AI ({model_name}) dla '{title}': {e}", flush=True)
                 time.sleep(1.2)
-                continue
 
-        if not content:
-            # awaryjna treść
-            content = f"# {title}\n\n{lead}\n\n(Brak treści – fallback)"
+        if not html:
+            # fallback minimalny, ale czytelny
+            safe_title = _escape_html(title)
+            safe_lead = _escape_html(lead)
+            safe_url = _escape_html(url)
+            html = (
+                f"<h2>Lead</h2><p><strong>Lead:</strong> {safe_lead}</p>"
+                f"<h2>Najważniejsze wnioski (TL;DR)</h2><ul><li>Brak danych z generatora – fallback.</li></ul>"
+                f"<h2>Źródło</h2><p><a href=\"{safe_url}\">{safe_url}</a></p>"
+            )
 
-        # upewnij się, że nie wstawimy podwójnego H1
-        normalized = content.lstrip()
-        if not normalized.startswith("#"):
-            # dołóż H1 tylko jeśli model sam nie zaczął od nagłówka
-            content = f"# {title}\n\n{content}"
+        html = _soft_sanitize(html)
+        html = _strip_h1_if_model_added(html)
+        html = _ensure_has_h1(title, html)
 
-        # nazwa pliku
         safe = _safe_filename(title, 60)
         filename = OUTPUT_DIR / f"{idx:03d}_{safe}.txt"
+        filename.write_text(html, encoding="utf-8")
 
-        with filename.open("w", encoding="utf-8") as f:
-            f.write(content)
-
-        print(f"✅ Wygenerowano: {filename.name}")
-
-
+        print(f"✅ Wygenerowano: {filename.name}", flush=True)
