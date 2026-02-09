@@ -2,204 +2,262 @@
 # Automatyczne: parsing → wybór → generacja → publikacja
 
 import os
-import re
+import json
 import time
-from pathlib import Path
+import subprocess
+import requests
+import shutil
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from textwrap import dedent
-
+from pathlib import Path
 try:
     from openai import OpenAI
 except Exception:
     OpenAI = None
 
 # ─────────────────────────────────────────────
-# KONFIG
+# ⚙️ 1. Konfiguracja
 # ─────────────────────────────────────────────
 load_dotenv("bot.env")
-OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 client = OpenAI(api_key=OPENAI_API_KEY) if (OpenAI and OPENAI_API_KEY) else None
 
-OUTPUT_DIR = Path("output_posts")
-OUTPUT_DIR.mkdir(exist_ok=True)
+WP_URL = (os.getenv("WP_URL") or "").rstrip("/")
+WP_USER = os.getenv("WP_USER", "")
+WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD", "")
+API_ENDPOINT = f"{WP_URL}/wp-json/wp/v2/posts" if WP_URL else ""
+AUTH = (WP_USER, WP_APP_PASSWORD) if (WP_USER and WP_APP_PASSWORD) else None
 
-PRIMARY_MODEL = "gpt-5"         # bez temperature
-FALLBACK_MODEL = "gpt-4o-mini"  # fallback z temperature
+DNI_WSTECZ = 3
+ARTYKULY_NA_ZRODLO = 2
+CUTOFF_DATE = datetime.today() - timedelta(days=DNI_WSTECZ)
+PUBLISHED_TITLES_PATH = Path("published_posts.json")
+ARTICLES_JSON_PATH = Path("all_articles_combined.json")
+POST_DIR = Path("output_posts")
 
-SERVICE_LINKS = [
-    {
-        "name": "Rozliczenia z NFZ",
-        "url": "https://genesmanager.pl/rozliczenia-z-nfz/",
-        "keywords": ["rozlicze", "sprawozdawczo", "raport", "świadcze", "produkt", "wycena", "umow", "nfz"],
-    },
-    {
-        "name": "Audyty dla podmiotów leczniczych",
-        "url": "https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/",
-        "keywords": ["audyt", "kontrol", "ryzyk", "korekt", "weryfikac", "zgodność", "nieprawidłowo"],
-    },
-    {
-        "name": "Przygotowanie oferty konkursowej do NFZ",
-        "url": "https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/",
-        "keywords": ["konkurs", "postępowan", "ofert", "ogłoszen", "rokowan", "kontraktowan"],
-    },
-    {
-        "name": "Rejestracja podmiotu leczniczego",
-        "url": "https://genesmanager.pl/rejestracja-podmiotu-leczniczego/",
-        "keywords": ["rejestrac", "rpwdl", "wpis", "podmiot lecznicz", "działalno", "forma praw"],
-    },
-]
+if PUBLISHED_TITLES_PATH.exists():
+    try:
+        with PUBLISHED_TITLES_PATH.open("r", encoding="utf-8") as f:
+            published_titles = set(json.load(f))
+    except Exception:
+        published_titles = set()
+else:
+    published_titles = set()
 
-def _clean_fences(text: str) -> str:
-    if not text:
-        return text
-    t = text.strip()
-    if t.startswith("```"):
-        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
-        t = re.sub(r"\s*```$", "", t)
-    return t.strip()
+def save_published_titles(titles):
+    with PUBLISHED_TITLES_PATH.open("w", encoding="utf-8") as f:
+        json.dump(sorted(list(titles)), f, ensure_ascii=False, indent=2)
 
-def _safe_filename(s: str, maxlen: int = 80) -> str:
-    s = (s or "").strip().replace(" ", "_")
-    s = re.sub(r"[^A-Za-z0-9_\-]", "", s)
-    return s[:maxlen] if len(s) > maxlen else s
+def is_recent(article_date_str):
+    try:
+        article_date = datetime.strptime(article_date_str, "%Y-%m-%d")
+        return article_date >= CUTOFF_DATE
+    except Exception:
+        return False
 
-def _call_openai(messages, use_primary=True) -> str:
-    if client is None:
-        raise RuntimeError("Brak klienta OpenAI (OPENAI_API_KEY lub biblioteka)")
+# Helpers to ensure non-empty fields
+def _safe_title(a):
+    return (a.get("title") or a.get("lead") or a.get("url") or "").strip()
 
-    if use_primary:
-        resp = client.chat.completions.create(model=PRIMARY_MODEL, messages=messages)
-    else:
-        resp = client.chat.completions.create(model=FALLBACK_MODEL, messages=messages, temperature=0.2)
-    return (resp.choices[0].message.content or "").strip()
+def _safe_lead(a):
+    return (a.get("lead") or a.get("title") or "").strip()
 
-def _compose_prompt(title: str, lead: str, url: str) -> str:
-    return dedent(f"""\
-    Jesteś ekspertem ds. ochrony zdrowia i redaktorem GenesManager.pl.
-    Napisz ekspercki, bardzo czytelny artykuł dla właścicieli i managerów placówek medycznych.
+# ─────────────────────────────────────────────
+# 🧠 4. Wybór artykułów przez GPT z retry i logowaniem
+# ─────────────────────────────────────────────
+def pick_most_relevant_articles(all_articles, n=2, retries=2):
+    recent_articles = [a for a in all_articles if is_recent(a.get("date", ""))]
 
-    Dane wejściowe:
-    - Tytuł: {title}
-    - Lead: {lead}
-    - Źródło: {url}
+    # Uzupełnij braki tytułów/leadów PRZED wysłaniem do GPT
+    for a in recent_articles:
+        if not (a.get("title") or "").strip():
+            a["title"] = _safe_title(a) or f"Aktualność {a.get('source','') or ''} {a.get('date','') or ''}".strip()
+        if not (a.get("lead") or "").strip():
+            a["lead"] = _safe_lead(a) or a["title"]
 
-    Wymagania:
-    - Output w czystym Markdown (bez bloków ```).
-    - Minimum 3000 znaków.
-    - Krótkie akapity, listy, treść „do skanowania”.
-    - Bez zmyślania liczb i szczegółów, jeśli źródło jest ogólne.
+    unpub = [a for a in recent_articles if a.get("title", "").strip() not in published_titles]
 
-    STRUKTURA (dokładnie w tej kolejności):
+    if len(unpub) <= n:
+        return unpub
 
-    # {title}
+    for attempt in range(retries):
+        prompt = (
+            "Jesteś doświadczonym redaktorem medycznym. Spośród poniższych artykułów wybierz dokładnie 2, "
+            "które są najważniejsze dla właścicieli i managerów placówek medycznych. "
+            "Priorytetowo traktuj informacje o postępowaniach konkursowych NFZ oraz o zmianach w przepisach (NFZ, MZ, RCL). "
+            "Podaj tylko numery wybranych pozycji jako listę JSON, np. [1, 4]\n\n"
+        )
+        for i, a in enumerate(unpub, 1):
+            prompt += f"{i}. {a['title']} — {a.get('lead','')}\n"
 
-    **Lead (1–2 zdania):** krótkie streszczenie tematu.
+        # Debug listy podawanej do GPT
+        print("\n📋 Po odfiltrowaniu mamy", len(unpub), "nieopublikowanych artykułów")
+        for i, a in enumerate(unpub, 1):
+            print(f"{i}. {a['title']}")
 
-    ## Najważniejsze wnioski (TL;DR)
-    - 4–6 punktów.
-
-    ## Co się zmienia / czego dotyczy informacja
-    Kontekst i zakres.
-
-    ## Kogo to dotyczy w praktyce
-    Jeśli pasuje: POZ / AOS / Szpital (w punktach).
-
-    ## Ryzyka i najczęstsze błędy
-    Lista + krótkie objaśnienia.
-
-    ## Co to oznacza dla rozliczeń i dokumentacji
-    Konkret: sprawozdawczość / organizacja pracy / terminy.
-
-    ## Dlaczego to ważne dla placówek
-    Sekcja obowiązkowa.
-
-    ## Co zrobić teraz (checklista)
-    - 8–12 punktów.
-
-    ## Jak GenesManager może pomóc
-    3–6 zdań + wstaw naturalnie maksymalnie 2 linki (Markdown) do pasujących usług (bez spamu).
-
-    ## Źródło
-    {url}
-    """)
-
-def inject_service_links(md: str, max_links: int = 2) -> str:
-    if not md:
-        return md
-
-    used = {s["url"] for s in SERVICE_LINKS if s["url"] in md}
-    if len(used) >= max_links:
-        return md
-
-    lower = md.lower()
-    scored = []
-    for s in SERVICE_LINKS:
-        if s["url"] in used:
-            continue
-        score = sum(1 for kw in s["keywords"] if kw in lower)
-        scored.append((score, s))
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    picks = [s for score, s in scored if score > 0][: (max_links - len(used))]
-    if not picks:
-        return md
-
-    bullets = "\n".join(
-        f"- [{s['name']}]({s['url']}) – wsparcie w tym obszarze, porządek w dokumentacji i mniejsze ryzyko błędów."
-        for s in picks
-    )
-
-    # wstaw w sekcji, jeśli istnieje
-    m = re.search(r"(?im)^\s*##\s+Jak\s+GenesManager\s+może\s+pomóc\s*$", md)
-    if m:
-        insert_pos = m.end()
-        return md[:insert_pos] + "\n" + bullets + "\n" + md[insert_pos:]
-
-    # albo dodaj przed Źródłem
-    src = re.search(r"(?im)^\s*##\s+Źródło\s*$", md)
-    if src:
-        pos = src.start()
-        return md[:pos] + "\n## Jak GenesManager może pomóc\n" + bullets + "\n\n" + md[pos:]
-
-    return md.rstrip() + "\n\n## Jak GenesManager może pomóc\n" + bullets + "\n"
-
-def normalize_headings(md: str) -> str:
-    # jeśli model użyje H4 jako głównych nagłówków, podnieś je na H2
-    return re.sub(r"(?m)^####\s+", "## ", md or "")
-
-def generate_posts(articles):
-    for idx, art in enumerate(articles, 1):
-        title = (art.get("title") or f"Aktualność {idx}").strip()
-        lead = (art.get("lead") or "").strip()
-        url = (art.get("url") or "").strip()
-
-        messages = [
-            {"role": "system", "content": "Jesteś ekspertem ds. ochrony zdrowia i redaktorem SEO dla GenesManager.pl."},
-            {"role": "user", "content": _compose_prompt(title, lead, url)}
-        ]
-
-        content = ""
-        for attempt in range(2):
+        try:
+            if client is None:
+                raise RuntimeError("Brak klienta OpenAI (OPENAI_API_KEY lub biblioteka)")
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Jesteś doświadczonym redaktorem medycznym."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3
+            )
+            content = response.choices[0].message.content.strip() if response.choices else ""
+            print(f"🔹 Debug GPT response (attempt {attempt+1}): {repr(content)}")
+            if not content:
+                time.sleep(2)
+                continue
             try:
-                use_primary = (attempt == 0)
-                txt = _call_openai(messages, use_primary=use_primary)
-                content = _clean_fences(txt)
-                break
-            except Exception as e:
-                model_name = PRIMARY_MODEL if attempt == 0 else FALLBACK_MODEL
-                print(f"⚠️ Błąd AI ({model_name}) dla '{title}': {e}", flush=True)
-                time.sleep(1.2)
+                indices = json.loads(content)
+                chosen = [unpub[i - 1] for i in indices if 0 < i <= len(unpub)]
+                if chosen:
+                    return chosen[:n]
+            except json.JSONDecodeError:
+                print("⚠️ Nie udało się sparsować JSON, retry...")
+                time.sleep(2)
+        except Exception as e:
+            print(f"⚠️ Błąd przy wyborze przez AI (attempt {attempt+1}): {e}")
+            time.sleep(2)
 
-        if not content:
-            content = f"# {title}\n\n{lead}\n\n(Brak treści – fallback)"
+    print("⚠️ Fallback: wybieram pierwsze 2 nieopublikowane artykuły")
+    return unpub[:n]
 
-        if not content.lstrip().startswith("#"):
-            content = f"# {title}\n\n{content}"
+# ─────────────────────────────────────────────
+# 🖊️ 5. Generowanie postów
+# ─────────────────────────────────────────────
+from genesmanager_generate_posts_from_json_dziala import generate_posts
 
-        content = normalize_headings(content)
-        content = inject_service_links(content, max_links=2)
+# ─────────────────────────────────────────────
+# 🌐 6. Publikacja na WordPress — 415-proof
+# ─────────────────────────────────────────────
+def extract_title_and_body(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        text = f.read().strip()
+    if not text:
+        return None, None
+    lines = text.splitlines()
+    title = (lines[0] or "").replace("#", "").replace("<h1>", "").replace("</h1>", "").strip()
+    body = "\n".join(lines[1:]).strip()
+    if not title:
+        # awaryjny tytuł z treści, ~10 słów
+        first_words = " ".join((body.split()[:10] if body else ["Aktualność", "GenesManager"]))
+        title = (first_words + "…").strip()
+    return title, body
 
-        safe = _safe_filename(title, 60)
-        filename = OUTPUT_DIR / f"{idx:03d}_{safe}.txt"
-        filename.write_text(content, encoding="utf-8")
-        print(f"✅ Wygenerowano: {filename.name}", flush=True)
+def publish_to_wordpress():
+    if not POST_DIR.exists():
+        print(f"❌ Folder {POST_DIR} nie istnieje.")
+        return
+
+    if not (API_ENDPOINT and AUTH and WP_URL):
+        print("⚠️ Brak konfiguracji WP_URL/WP_USER/WP_APP_PASSWORD – pomijam publikację.")
+        return
+
+    headers_json = {
+        "Accept": "application/json",
+        "Content-Type": "application/json; charset=UTF-8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": "GenesManager/1.0 (+requests)"
+    }
+    headers_form = {
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": "GenesManager/1.0 (+requests)"
+    }
+
+    def _post_with_fallback(payload):
+        # 1) JSON
+        resp = requests.post(API_ENDPOINT, auth=AUTH, headers=headers_json, json=payload, timeout=30)
+        if resp.status_code == 201:
+            return resp
+
+        # 2) raw JSON w body
+        if resp.status_code in (400, 403, 404, 406, 415, 500):
+            resp2 = requests.post(
+                API_ENDPOINT, auth=AUTH, headers=headers_json,
+                data=json.dumps(payload).encode("utf-8"), timeout=30
+            )
+            if resp2.status_code == 201:
+                return resp2
+
+            # 3) application/x-www-form-urlencoded
+            resp3 = requests.post(
+                API_ENDPOINT, auth=AUTH, headers=headers_form,
+                data={"title": payload["title"], "content": payload["content"], "status": payload["status"]},
+                timeout=30
+            )
+            return resp3
+        return resp
+
+    for file in sorted(POST_DIR.glob("*.txt")):
+        title, body = extract_title_and_body(file)
+        if title and body:
+            payload = {"title": title, "content": body, "status": "publish"}
+            resp = _post_with_fallback(payload)
+            if resp.status_code == 201:
+                print(f"✅ Opublikowano: {title}")
+            else:
+                preview = (resp.text or "")[:600].replace("\n", " ")
+                print(f"❌ Błąd publikacji {title}: {resp.status_code} – {preview}")
+        else:
+            print(f"⚠️ Pominięto pusty lub niepoprawny plik: {file.name}")
+
+# ─────────────────────────────────────────────
+# 🚀 7. Główna logika
+# ─────────────────────────────────────────────
+def main():
+    print("\n🛠️ 1. Uruchamianie parsera...")
+    parser_path = Path(__file__).parent / "parser_all_sources_combined_dziala.py"
+    result = subprocess.run(["python", str(parser_path.resolve())])
+
+    if result.returncode != 0:
+        print("❌ Parser nie został uruchomiony poprawnie (kontynuuję, jeśli JSON istnieje).")
+
+    # Bezpieczne czyszczenie output_posts
+    POST_DIR.mkdir(exist_ok=True)
+    for file in POST_DIR.glob("*"):
+        try:
+            if file.is_file():
+                file.unlink()
+            elif file.is_dir():
+                shutil.rmtree(file, ignore_errors=True)
+        except Exception as e:
+            print(f"⚠️ Nie udało się usunąć {file}: {e}")
+
+    if not ARTICLES_JSON_PATH.exists():
+        print("❌ Nie znaleziono pliku all_articles_combined.json po parsowaniu.")
+        return
+
+    print("\n📥 2. Wczytywanie artykułów...")
+    with ARTICLES_JSON_PATH.open("r", encoding="utf-8") as f:
+        all_articles = json.load(f)
+
+    print("\n🎯 3. Wybór 2 najważniejszych artykułów przez AI...")
+    selected = pick_most_relevant_articles(all_articles)
+
+    if not selected:
+        print("⚠️ Brak nowych artykułów do przetworzenia.")
+        return
+
+    print("\n✍️ 4. Generowanie postów z AI...")
+    generate_posts(selected)
+
+    print("\n🌐 5. Publikacja na WordPress...")
+    publish_to_wordpress()
+
+    print("\n💾 6. Zapis publikacji...")
+    for art in selected:
+        published_titles.add(art.get("title", ""))
+    save_published_titles(published_titles)
+
+    print("\n✅ Zakończono cały pipeline.")
+
+if __name__ == "__main__":
+    main()
