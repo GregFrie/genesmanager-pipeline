@@ -1,308 +1,259 @@
-# 🧩 ALL-IN-ONE FINAL PIPELINE for GenesManager
-# Automatyczne: parsing → wybór → generacja → publikacja
-
 import os
-import json
-import time
-import subprocess
-import requests
-import shutil
 import re
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
+import time
+import json
 from pathlib import Path
+from dotenv import load_dotenv
+from textwrap import dedent
+
 try:
     from openai import OpenAI
 except Exception:
     OpenAI = None
 
 # ─────────────────────────────────────────────
-# ⚙️ 1. Konfiguracja
+# KONFIG
 # ─────────────────────────────────────────────
 load_dotenv("bot.env")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 client = OpenAI(api_key=OPENAI_API_KEY) if (OpenAI and OPENAI_API_KEY) else None
 
-# modele
-PRIMARY_MODEL = "gpt-5"       # bez parametru temperature!
-FALLBACK_MODEL = "gpt-4o-mini"  # fallback (tu możemy dać temperature)
+OUTPUT_DIR = Path("output_posts")
+OUTPUT_DIR.mkdir(exist_ok=True)
 
-WP_URL = (os.getenv("WP_URL") or "").rstrip("/")
-WP_USER = os.getenv("WP_USER", "")
-WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD", "")
-API_ENDPOINT = f"{WP_URL}/wp-json/wp/v2/posts" if WP_URL else ""
-AUTH = (WP_USER, WP_APP_PASSWORD) if (WP_USER and WP_APP_PASSWORD) else None
-
-DNI_WSTECZ = 3
-CUTOFF_DATE = datetime.today() - timedelta(days=DNI_WSTECZ)
-PUBLISHED_TITLES_PATH = Path("published_posts.json")
-ARTICLES_JSON_PATH = Path("all_articles_combined.json")
-POST_DIR = Path("output_posts")
-
-if PUBLISHED_TITLES_PATH.exists():
-    try:
-        with PUBLISHED_TITLES_PATH.open("r", encoding="utf-8") as f:
-            published_titles = set(json.load(f))
-    except Exception:
-        published_titles = set()
-else:
-    published_titles = set()
-
-def save_published_titles(titles):
-    with PUBLISHED_TITLES_PATH.open("w", encoding="utf-8") as f:
-        json.dump(sorted(list(titles)), f, ensure_ascii=False, indent=2)
-
-def is_recent(article_date_str):
-    try:
-        article_date = datetime.strptime(article_date_str, "%Y-%m-%d")
-        return article_date >= CUTOFF_DATE
-    except Exception:
-        return False
-
-def _safe_title(a):
-    return (a.get("title") or a.get("lead") or a.get("url") or "").strip()
-
-def _safe_lead(a):
-    return (a.get("lead") or a.get("title") or "").strip()
-
-def _strip_code_fences(s: str) -> str:
-    if not s:
-        return s
-    s = s.strip()
-    # usuń ```json ... ``` lub ``` ... ```
-    if s.startswith("```"):
-        s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
-        s = re.sub(r"\s*```$", "", s)
-    return s.strip()
-
-def _try_parse_indices(s: str, max_n: int):
-    """
-    Spróbuj sparsować listę indeksów z tekstu s do listy int (1‑indeksowane).
-    Dodatkowe bezpieczeństwo na wypadek spacji/nowych linii.
-    """
-    s = _strip_code_fences(s)
-    try:
-        data = json.loads(s)
-        if isinstance(data, list):
-            out = []
-            for x in data:
-                try:
-                    i = int(x)
-                    if 1 <= i <= max_n:
-                        out.append(i)
-                except Exception:
-                    continue
-            return out
-    except Exception:
-        pass
-    # heurystyka: wyciągnij liczby z nawiasów kwadratowych
-    m = re.search(r"\[(.*?)\]", s)
-    if m:
-        nums = re.findall(r"\d+", m.group(1))
-        return [int(x) for x in nums if 1 <= int(x) <= max_n]
-    return []
+PRIMARY_MODEL = "gpt-5"         # bez param. temperature
+FALLBACK_MODEL = "gpt-4o-mini"  # fallback z temperature
 
 # ─────────────────────────────────────────────
-# 🧠 2. Wybór artykułów przez GPT-5 (+ fallback)
+# Linki do usług + dopasowanie po słowach kluczowych
 # ─────────────────────────────────────────────
-def pick_most_relevant_articles(all_articles, n=2, retries=2):
-    recent_articles = [a for a in all_articles if is_recent(a.get("date", ""))]
+SERVICE_LINKS = [
+    {
+        "name": "Audyty dla podmiotów leczniczych",
+        "url": "https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/",
+        "keywords": ["audyt", "kontrola", "ryzyko", "dokumentacja medyczna", "weryfikacja", "zgodność", "nieprawidłowości"],
+    },
+    {
+        "name": "Rozliczenia z NFZ",
+        "url": "https://genesmanager.pl/rozliczenia-z-nfz/",
+        "keywords": ["rozliczenia", "sprawozdawczość", "raport", "świadczenia", "wycena", "finanse", "umowy", "nfz"],
+    },
+    {
+        "name": "Przygotowanie oferty konkursowej do NFZ",
+        "url": "https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/",
+        "keywords": ["konkurssy", "postępowania", "oferty", "ogłoszenia", "rokowania", "kontraktowania", "świadczeniodawca"],
+    },
+    {
+        "name": "Rejestracja podmiotu leczniczego",
+        "url": "https://genesmanager.pl/rejestracja-podmiotu-leczniczego/",
+        "keywords": ["rejestracja", "rpwdl", "wpis", "podmiot leczniczy", "działalność medyczna", "dokumentacja"],
+    },
+]
 
-    for a in recent_articles:
-        if not (a.get("title") or "").strip():
-            a["title"] = _safe_title(a) or f"Aktualność {a.get('source','')} {a.get('date','')}".strip()
-        if not (a.get("lead") or "").strip():
-            a["lead"] = _safe_lead(a) or a["title"]
-
-    unpub = [a for a in recent_articles if a.get("title", "").strip() not in published_titles]
-
-    if len(unpub) <= n:
-        return unpub
-
-    base_prompt = (
-        "Jesteś doświadczonym redaktorem medycznym. Spośród poniższych artykułów wybierz dokładnie 2, "
-        "które są najważniejsze dla właścicieli i managerów placówek medycznych. "
-        "Priorytet: 1) konkursy NFZ, 2) zmiany w przepisach (NFZ, MZ, RCL). "
-        "Podaj tylko numery w JSON, np. [1, 4]\n\n"
-    )
-
-    listing = ""
-    for i, a in enumerate(unpub, 1):
-        listing += f"{i}. {a['title']} — {a.get('lead','')}\n"
-
-    messages = [
-        {"role": "system", "content": "Jesteś doświadczonym redaktorem medycznym."},
-        {"role": "user", "content": base_prompt + listing}
-    ]
-
-    def _ask_ai(use_primary=True):
-        if client is None:
-            raise RuntimeError("Brak klienta OpenAI (OPENAI_API_KEY?)")
-        if use_primary:
-            # GPT-5 — bez temperature
-            resp = client.chat.completions.create(
-                model=PRIMARY_MODEL,
-                messages=messages
-            )
-        else:
-            # fallback: gpt-4o-mini — możemy użyć niskiej temperatury
-            resp = client.chat.completions.create(
-                model=FALLBACK_MODEL,
-                messages=messages,
-                temperature=0.2
-            )
-        return (resp.choices[0].message.content or "").strip()
-
-    print("\n📋 Artykuły kandydujące:", len(unpub))
-    for i, a in enumerate(unpub, 1):
-        print(f"{i}. {a['title']}")
-
-    for attempt in range(retries):
-        try:
-            use_primary = (attempt == 0)
-            content = _ask_ai(use_primary=use_primary)
-            print(f"🔹 Debug GPT response (attempt {attempt+1}): {repr(content)}")
-            idxs = _try_parse_indices(content, max_n=len(unpub))
-            if idxs:
-                chosen = [unpub[i - 1] for i in idxs][:n]
-                if chosen:
-                    return chosen
-        except Exception as e:
-            which = PRIMARY_MODEL if attempt == 0 else FALLBACK_MODEL
-            print(f"⚠️ AI error (attempt {attempt+1}, {which}): {e}")
-            time.sleep(1.0)
-
-    print("⚠️ Fallback → wybieram pierwsze 2")
-    return unpub[:n]
-
-# ─────────────────────────────────────────────
-# 🖊️ 3. Generowanie postów
-# ─────────────────────────────────────────────
-from genesmanager_generate_posts_from_json_dziala import generate_posts
-
-# ─────────────────────────────────────────────
-# 🌐 4. Publikacja na WordPress (z 415‑proof fallback)
-# ─────────────────────────────────────────────
-def extract_title_and_body(file_path):
-    with open(file_path, "r", encoding="utf-8") as f:
-        text = f.read().strip()
+def _clean_fences(text: str) -> str:
     if not text:
-        return None, None
-    lines = text.splitlines()
-    title = (lines[0] or "").replace("#", "").replace("<h1>", "").replace("</h1>", "").strip()
-    body = "\n".join(lines[1:]).strip()
-    if not title:
-        first_words = " ".join((body.split()[:10] if body else ["Aktualność", "GenesManager"]))
-        title = (first_words + "…").strip()
-    return title, body
+        return text
+    t = text.strip()
+    if t.startswith("```"):
+        # usuń ```lang\n ... \n```
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t)
+    return t.strip()
 
-def publish_to_wordpress():
-    if not POST_DIR.exists():
-        print(f"❌ Brak folderu {POST_DIR}")
-        return
-    if not (API_ENDPOINT and AUTH and WP_URL):
-        print("⚠️ Brak konfiguracji WP_URL/WP_USER/WP_APP_PASSWORD")
-        return
+def _safe_filename(s: str, maxlen: int = 80) -> str:
+    s = (s or "").strip().replace(" ", "_")
+    s = re.sub(r"[^A-Za-z0-9_\-]", "", s)
+    return s[:maxlen] if len(s) > maxlen else s
 
-    headers_json = {
-        "Accept": "application/json",
-        "Content-Type": "application/json; charset=UTF-8",
-        "User-Agent": "GenesManager/1.0",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-    }
-    headers_form = {
-        "Accept": "application/json",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "User-Agent": "GenesManager/1.0",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-    }
+def _call_openai(messages, use_primary=True) -> str:
+    if client is None:
+        raise RuntimeError("Brak klienta OpenAI (OPENAI_API_KEY lub biblioteka)")
 
-    def _post_with_fallback(payload):
-        # 1) klasyczny JSON
-        resp = requests.post(API_ENDPOINT, auth=AUTH, headers=headers_json, json=payload, timeout=30)
-        if resp.status_code == 201:
-            return resp
+    if use_primary:
+        resp = client.chat.completions.create(
+            model=PRIMARY_MODEL,
+            messages=messages
+        )
+    else:
+        resp = client.chat.completions.create(
+            model=FALLBACK_MODEL,
+            messages=messages,
+            temperature=0.2
+        )
+    return (resp.choices[0].message.content or "").strip()
 
-        # 2) raw JSON w body
-        if resp.status_code in (400, 403, 404, 406, 415, 500):
-            resp2 = requests.post(
-                API_ENDPOINT, auth=AUTH, headers=headers_json,
-                data=json.dumps(payload).encode("utf-8"), timeout=30
-            )
-            if resp2.status_code == 201:
-                return resp2
+def _compose_prompt(title: str, lead: str, url: str) -> str:
+    """
+    Wymusza czytelną strukturę (H2 + listy + checklista)
+    + sekcję, w której model MA wstawić max 2 linki kontekstowo.
+    """
+    return dedent(f"""\
+    Jesteś ekspertem ds. ochrony zdrowia i redaktorem GenesManager.pl.
+    Napisz ekspercki, bardzo czytelny artykuł dla właścicieli i managerów placówek medycznych.
 
-            # 3) application/x-www-form-urlencoded
-            resp3 = requests.post(
-                API_ENDPOINT, auth=AUTH, headers=headers_form,
-                data={"title": payload["title"], "content": payload["content"], "status": payload["status"]},
-                timeout=30
-            )
-            return resp3
-        return resp
+    Dane wejściowe:
+    - Tytuł: {title}
+    - Lead: {lead}
+    - Źródło: {url}
 
-    for file in sorted(POST_DIR.glob("*.txt")):
-        title, body = extract_title_and_body(file)
-        if title and body:
-            payload = {"title": title, "content": body, "status": "publish"}
-            resp = _post_with_fallback(payload)
-            if resp.status_code == 201:
-                print(f"✅ Opublikowano: {title}")
-            else:
-                preview = (resp.text or "")[:600].replace("\n", " ")
-                print(f"❌ Błąd {title}: {resp.status_code} – {preview}")
-        else:
-            print(f"⚠️ Pominięto plik: {file.name}")
+    Wymagania twarde:
+    - Output w czystym Markdown (bez bloków ```).
+    - Minimum 3000 znaków.
+    - Styl: profesjonalny, merytoryczny, praktyczny (bez clickbaitu).
+    - Jeśli źródło jest ogólne: nie zmyślaj liczb ani szczegółów; pisz ostrożnie i zaznacz brak danych.
+    - Pisz tak, żeby tekst dało się SKANOWAĆ wzrokiem: krótkie akapity, listy, wyróżnienia.
 
-# ─────────────────────────────────────────────
-# 🚀 5. Main
-# ─────────────────────────────────────────────
-def main():
-    print("\n🛠️ Parser...")
-    parser_path = Path(__file__).parent / "parser_all_sources_combined_dziala.py"
-    result = subprocess.run(["python", str(parser_path.resolve())])
+    STRUKTURA (dokładnie w tej kolejności):
 
-    if result.returncode != 0:
-        print("❌ Parser error (kontynuuję jeśli JSON istnieje)")
+    # {title}
 
-    POST_DIR.mkdir(exist_ok=True)
-    for file in POST_DIR.glob("*"):
-        try:
-            if file.is_file():
-                file.unlink()
-            elif file.is_dir():
-                shutil.rmtree(file, ignore_errors=True)
-        except Exception as e:
-            print(f"⚠️ Delete fail {file}: {e}")
+    **Lead (1–2 zdania):** krótkie streszczenie tematu.
 
-    if not ARTICLES_JSON_PATH.exists():
-        print("❌ Brak all_articles_combined.json")
-        return
+    ## Najważniejsze wnioski (TL;DR)
+    - 4–6 punktów (konkret).
 
-    with ARTICLES_JSON_PATH.open("r", encoding="utf-8") as f:
-        all_articles = json.load(f)
+    ## Co się zmienia / czego dotyczy informacja
+    Krótko, rzeczowo: kontekst i zakres.
 
-    print("\n🎯 Wybór artykułów...")
-    selected = pick_most_relevant_articles(all_articles)
+    ## Kogo to dotyczy w praktyce
+    Jeśli pasuje: osobne podpunkty dla POZ / AOS / Szpital.
 
-    if not selected:
-        print("⚠️ Brak nowych artykułów")
-        return
+    ## Ryzyka i najczęstsze błędy
+    Lista + krótkie wyjaśnienia (praktyczne).
 
-    print("\n✍️ Generowanie postów...")
-    generate_posts(selected)
+    ## Co to oznacza dla rozliczeń i dokumentacji
+    Sprawozdawczość / terminy / organizacja pracy — tylko to, co wynika z tematu.
 
-    print("\n🌐 Publikacja...")
-    publish_to_wordpress()
+    ## Dlaczego to ważne dla placówek
+    Sekcja obowiązkowa – praktyczne uzasadnienie.
 
-    print("\n💾 Zapis publikacji...")
-    for art in selected:
-        published_titles.add(art.get("title", ""))
-    save_published_titles(published_titles)
+    ## Co zrobić teraz (checklista)
+    - 8–12 punktów do odhaczenia.
 
-    print("\n✅ Pipeline zakończony")
+    ## Jak GenesManager może pomóc
+    Napisz 3–6 zdań i wstaw NATURALNIE maksymalnie 2 linki (Markdown) — tylko jeśli pasują do tematu:
+    - Audyty: https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/
+    - Rejestracja: https://genesmanager.pl/rejestracja-podmiotu-leczniczego/
+    - Oferta konkursowa NFZ: https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/
+    - Rozliczenia NFZ: https://genesmanager.pl/rozliczenia-z-nfz/
+    Zasady:
+    - nie dawaj 2 linków do tej samej usługi,
+    - nie spamuj linkami w innych sekcjach.
 
-if __name__ == "__main__":
-    main()
+    ## Źródło
+    {url}
+    """)
+
+def inject_service_links(markdown: str, max_links: int = 2) -> str:
+    """
+    Deterministycznie dopilnowuje linków:
+    - max 2 linki
+    - bez duplikacji
+    - w sekcji "Jak GenesManager może pomóc" (jeśli istnieje), inaczej doda sekcję.
+    """
+    if not markdown:
+        return markdown
+
+    used = set()
+    for s in SERVICE_LINKS:
+        if s["url"] in markdown:
+            used.add(s["url"])
+
+    if len(used) >= max_links:
+        return markdown
+
+    lower = markdown.lower()
+
+    scored = []
+    for s in SERVICE_LINKS:
+        if s["url"] in used:
+            continue
+        score = 0
+        for kw in s["keywords"]:
+            if kw in lower:
+                score += 1
+        scored.append((score, s))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    picks = [s for score, s in scored if score > 0][: (max_links - len(used))]
+
+    if not picks:
+        return markdown
+
+    bullets = []
+    for s in picks:
+        used.add(s["url"])
+        bullets.append(f"- [{s['name']}]({s['url']}) – wsparcie w tym obszarze, porządek w dokumentacji i mniejsze ryzyko błędów.")
+
+    block = "\n".join(bullets)
+
+    # 1) spróbuj w sekcji "Jak GenesManager może pomóc"
+    m = re.search(r"(?im)^(##\s+Jak\s+GenesManager\s+może\s+pomóc\s*)$", markdown)
+    if m:
+        # wstaw tuż po nagłówku
+        insert_pos = m.end()
+        return markdown[:insert_pos] + "\n" + block + "\n" + markdown[insert_pos:]
+
+    # 2) jeśli jest "## Źródło" — wstaw przed nim
+    src = re.search(r"(?im)^\s*##\s+Źródło\s*$", markdown)
+    if src:
+        pos = src.start()
+        return markdown[:pos] + "\n## Jak GenesManager może pomóc\n" + block + "\n\n" + markdown[pos:]
+
+    # 3) ostatecznie dopisz na końcu
+    return markdown.rstrip() + "\n\n## Jak GenesManager może pomóc\n" + block + "\n"
+
+def normalize_headings(markdown: str) -> str:
+    """
+    Dodatkowo: jeśli model użyje H4 jako głównych nagłówków, podniesiemy je na H2.
+    (Nie rozwala to struktury, a poprawia czytelność.)
+    """
+    if not markdown:
+        return markdown
+    # Zamień linie zaczynające się od "#### " na "## "
+    markdown = re.sub(r"(?m)^####\s+", "## ", markdown)
+    return markdown
+
+def generate_posts(articles):
+    for idx, art in enumerate(articles, 1):
+        title = (art.get("title") or f"Aktualność {idx}").strip()
+        lead = (art.get("lead") or "").strip()
+        url = (art.get("url") or "").strip()
+
+        messages = [
+            {"role": "system", "content": "Jesteś ekspertem ds. ochrony zdrowia i redaktorem SEO dla GenesManager.pl."},
+            {"role": "user", "content": _compose_prompt(title, lead, url)}
+        ]
+
+        content = ""
+        for attempt in range(2):
+            try:
+                use_primary = (attempt == 0)
+                txt = _call_openai(messages, use_primary=use_primary)
+                txt = _clean_fences(txt)
+                content = txt
+                break
+            except Exception as e:
+                model_name = PRIMARY_MODEL if attempt == 0 else FALLBACK_MODEL
+                print(f"⚠️ Błąd AI ({model_name}) dla '{title}': {e}")
+                time.sleep(1.2)
+
+        if not content:
+            content = f"# {title}\n\n{lead}\n\n(Brak treści – fallback)"
+
+        # jeśli model nie zaczął od H1, dołóż
+        normalized = content.lstrip()
+        if not normalized.startswith("#"):
+            content = f"# {title}\n\n{content}"
+
+        # popraw czytelność nagłówków + dopilnuj linków
+        content = normalize_headings(content)
+        content = inject_service_links(content, max_links=2)
+
+        safe = _safe_filename(title, 60)
+        filename = OUTPUT_DIR / f"{idx:03d}_{safe}.txt"
+
+        with filename.open("w", encoding="utf-8") as f:
+            f.write(content)
+
+        print(f"✅ Wygenerowano: {filename.name}")
