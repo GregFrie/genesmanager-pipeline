@@ -118,8 +118,6 @@ Zasady linkowania:
 ## Źródło
 Podaj link do źródła: {url}
 """
-"""
-
 def generate_posts(articles):
     for idx, art in enumerate(articles, 1):
         title = art.get("title", f"Aktualność {idx}").strip()
@@ -164,4 +162,5 @@ def generate_posts(articles):
             f.write(content)
 
         print(f"✅ Wygenerowano: {filename.name}")
+
 
