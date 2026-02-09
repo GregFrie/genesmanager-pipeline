@@ -62,7 +62,7 @@ def _call_openai(messages, use_primary=True):
 
 def _compose_prompt(title: str, lead: str, url: str) -> str:
     return f"""
-Jesteś ekspertem ds. ochrony zdrowia i redaktorem.
+Jesteś ekspertem ds. ochrony zdrowia i redaktorem medycznym GenesManager.pl
 Napisz artykuł na stronę dla managerów placówek medycznych.
 
 Dane wejściowe:
@@ -78,6 +78,46 @@ Wymagania:
 - SEO: zwięzły lead (1–2 zdania), śródtytuły zawierają słowa kluczowe z tematu.
 - Jeśli źródło jest ogólne, nie zmyślaj liczb – pisz ostrożnie i zaznacz brak pełnych danych.
 Output w czystym Markdown (bez bloków ```).
+STRUKTURA (dokładnie w tej kolejności):
+# {title}
+
+**Lead (1–2 zdania):** krótkie streszczenie.
+
+## Najważniejsze wnioski (TL;DR)
+- 4–6 punktów, zwięzłe, konkretne.
+
+## Co się zmienia / czego dotyczy informacja
+Wyjaśnij temat i kontekst (bez lania wody).
+
+## Kogo to dotyczy w praktyce
+Podziel na: POZ / AOS / Szpital / inne (jeśli pasuje).
+
+## Ryzyka i najczęstsze błędy (jesli pasuje)
+Lista + krótkie wyjaśnienia.
+
+## Co to oznacza dla rozliczeń i dokumentacji (jesli pasuje)
+Konkrety: sprawozdawczość, terminy, organizacja pracy.
+
+## Dlaczego to ważne dla placówek
+Sekcja obowiązkowa – praktyczne uzasadnienie.
+
+## Co zrobić teraz (checklista) (jesli pasuje)
+- 5–10 punktów do odhaczenia.
+
+## Jak GenesManager może pomóc (wstaw linki kontekstowo)
+W tej sekcji wstaw NATURALNIE maksymalnie 2 linki (Markdown):
+- Audyty: https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/
+- Rejestracja podmiotu: https://genesmanager.pl/rejestracja-podmiotu-leczniczego/
+- Oferta konkursowa NFZ: https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/
+- Rozliczenia z NFZ: https://genesmanager.pl/rozliczenia-z-nfz/
+Zasady linkowania:
+- Tylko tam, gdzie temat pasuje (np. kontrola/ryzyko -> audyt; sprawozdawczość -> rozliczenia; konkurs -> oferta; formalności -> rejestracja).
+- Nie wstawiaj 2 linków do tej samej usługi.
+- Nie wstawiaj linków w każdym akapicie.
+
+## Źródło
+Podaj link do źródła: {url}
+"""
 """
 
 def generate_posts(articles):
@@ -124,3 +164,4 @@ def generate_posts(articles):
             f.write(content)
 
         print(f"✅ Wygenerowano: {filename.name}")
+
