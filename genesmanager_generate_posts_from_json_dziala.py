@@ -70,19 +70,22 @@ Zasada nadrzędna: TRZYMAJ SIĘ WYŁĄCZNIE TEGO TEMATU.
 - Nie opisuj innych zmian w ochronie zdrowia, nawet jeśli są „podobne”.
 - Jeśli trafisz na wątek poboczny, uwzględnij go tylko wtedy, gdy ma bezpośredni wpływ na temat (1–2 zdania max).
 
+Priorytety analizy (od najważniejszego):
+1) Wpływ na NFZ: kontraktowanie, ogłoszenia konkursowe, warunki realizacji umów, sprawozdawczość, rozliczenia, ryzyka korekt/zwrotów.
+2) Wpływ na finansowanie i dofinansowania: programy, dotacje, środki UE/KPO, MZ/Agencje, fundusze celowe – o ile dotyczą tego tematu.
+3) Wpływ operacyjny: organizacja pracy, wymagania kadrowe, procedury, dokumentacja, IT (P1, e-ZLA, RPWDL, gabinety), RODO.
+4) Wpływ prawny i compliance: ustawy/rozporządzenia/zarządzenia/komunikaty, wymagania formalne, ryzyka interpretacyjne.
+
 Źródła:
 - Traktuj link poniżej jako punkt startowy.
 - Uzupełnij o inne wiarygodne źródła TYLKO jeśli dotyczą dokładnie tego samego zagadnienia.
 - Jeśli nie znajdujesz potwierdzeń w innych źródłach: napisz „Brak wiarygodnych potwierdzeń poza źródłem startowym”.
 
-Wynik (format obowiązkowy):
-1) Co wiemy na pewno (fakty + podstawa: dokument/instytucja/źródło)
-2) Czego nie wiemy / co jest na etapie zapowiedzi
-3) Konsekwencje dla placówek (POZ/AOS/szpital – tylko jeśli ma sens)
-4) Konsekwencje dla NFZ (kontraktowanie/rozliczenia/sprawozdawczość)
-5) Finansowanie/dofinansowania (jeśli dotyczy)
-6) Ryzyka i typowe błędy (interpretacja, dokumentacja, IT, odpowiedzialność)
-7) Co monitorować w kolejnych tygodniach (sygnały, dokumenty, terminy)
+Wynik:
+- Zwróć notatki w 7 sekcjach logicznych odpowiadających: (a) fakty potwierdzone, (b) elementy niepewne/zapowiedzi, (c) konsekwencje dla placówek, (d) konsekwencje dla NFZ, (e) finansowanie/dofinansowania (jeśli dotyczy), (f) ryzyka i typowe błędy, (g) co monitorować dalej.
+- UWAGA: nie nazywaj sekcji dosłownie w stylu „Co wiemy na pewno / Czego nie wiemy…”.
+  Zamiast tego użyj NATURALNYCH, krótkich tytułów roboczych (1 linia), które pasują do konkretnego tematu.
+- Tytuły sekcji mają się różnić pomiędzy tematami; unikaj powtarzalnych „szablonowych” nazw.
 
 Źródło startowe:
 {url}
@@ -93,7 +96,7 @@ Pisz po polsku, rzeczowo, bez lania wody. Bez cytowania długich fragmentów.
 
 def _article_prompt(title: str, lead: str, url: str, research: str) -> str:
     return f"""
-Jesteś redaktorem medycznym i eksperckim GenesManager.pl.
+Jesteś redaktorem eksperckim GenesManager.pl.
 
 Na podstawie PONIŻSZEGO RESEARCHU przygotuj AUTORSKI artykuł
 dla właścicieli i managerów placówek medycznych.
@@ -102,14 +105,17 @@ RESEARCH (do wykorzystania, nie cytowania):
 {research}
 
 Wymagania kluczowe:
-0) Pierwsza linia MUSI być: <h1>...</h1>
-   - to ma być NOWY tytuł (inny niż tytuł źródła i inny niż: "{title}").
 1) Zwróć WYŁĄCZNIE czysty HTML do WordPressa (bez Markdown).
 2) Zakaz Markdown: żadnych #, ##, **, list z myślnikami, żadnych ``` .
 3) Używaj tylko tagów: <h3>, <h4>, <p>, <strong>, <ul>, <li>, <a>.
    - NIE używaj <h2>.
-4) Nagłówki sekcji mają być krótkie i naturalne, ale NIE NARZUCAMY ich brzmienia:
-   - sam dobierz 5–8 nagłówków <h4> adekwatnych do treści (bez schematu „TL;DR” jeśli nie pasuje).
+4) Nagłówki sekcji:
+   - Sam dobierz 5–8 nagłówków <h4> adekwatnych do treści.
+   - Nagłówki mają brzmieć naturalnie i redakcyjnie (jak w dobrym artykule branżowym), a nie jak lista kontrolna.
+   - NIE wolno używać w nagłówkach sformułowań przeniesionych z prompta lub „formatu notatek” (np. „konsekwencje dla NFZ”, „co monitorować”, „ryzyka i typowe błędy” itp.).
+   - Unikaj powtarzania tych samych nazw nagłówków w kolejnych artykułach: każde <h4> ma być możliwie unikalne dla tematu.
+   - Technika: najpierw napisz całą treść w akapitach, a dopiero potem nazwij sekcje krótkimi tytułami <h4> pasującymi do już napisanego tekstu.
+   - Tytuł artykułu MA BYĆ INNY niż tytuł źródła.
 5) Styl:
    - dobra, profesjonalna polszczyzna,
    - pełne zdania, logiczne łączenia myśli,
@@ -166,9 +172,8 @@ def generate_posts(articles):
         )
         html = _clean(html)
 
-        # Kontrola: upewnij się, że jest H1 na początku; jeśli nie, dodaj awaryjnie
-        if not re.search(r"(?is)^\s*<h1\b[^>]*>.*?</h1>", html):
-            html = f"<h1>{_escape_html(title)}</h1>\n{html}"
+        # dodaj H1 ręcznie (kontrola)
+        html = f"<h1>{_escape_html(title)}</h1>\n{html}"
 
         filename = OUTPUT_DIR / f"{idx:03d}_{_safe_filename(title, 60)}.txt"
         filename.write_text(html, encoding="utf-8")
