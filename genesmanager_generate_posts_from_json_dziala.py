@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import base64
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -19,8 +20,15 @@ client = OpenAI(api_key=OPENAI_API_KEY) if (OpenAI and OPENAI_API_KEY) else None
 OUTPUT_DIR = Path("output_posts")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+IMAGES_DIR = OUTPUT_DIR / "images"
+IMAGES_DIR.mkdir(exist_ok=True)
+
 PRIMARY_MODEL = "gpt-5"
 FALLBACK_MODEL = "gpt-4o-mini"
+
+# Model do obrazów (najczęściej działa jako gpt-image-1)
+IMAGE_MODEL = "gpt-image-1"
+IMAGE_SIZE = "1024x1024"
 
 # ─────────────────────────────────────────────
 # HELPERS
@@ -57,7 +65,7 @@ def _escape_html(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 # ─────────────────────────────────────────────
-# ✅ FOTO (opis + ALT + placeholder IMG)
+# ✅ FOTO (opis + ALT + GENERACJA PNG)
 # ─────────────────────────────────────────────
 def _image_prompt(title: str) -> str:
     return f"""
@@ -91,13 +99,47 @@ def _parse_image_meta(text: str) -> tuple[str, str]:
     if m2:
         alt = m2.group(1).strip()
 
-    # fallbacki, żeby zawsze coś było
     if not alt:
         alt = opis or "Zdjęcie ilustracyjne do artykułu GenesManager"
     if not opis:
         opis = alt
 
     return opis, alt
+
+def _generate_image_png(image_description: str, out_path: Path) -> bool:
+    """
+    Generuje obraz (PNG) przez OpenAI Images API i zapisuje do out_path.
+    Zwraca True jeśli się udało.
+    """
+    if client is None:
+        raise RuntimeError("Brak klienta OpenAI")
+
+    # prompt stricte do obrazu (bez meta)
+    prompt = (
+        f"Realistyczne zdjęcie stockowe: {image_description}. "
+        "Naturalne światło, dokumentalny/biurowy klimat, brak napisów w kadrze, brak logotypów, brak osób publicznych. "
+        "Wygląd jak prawdziwa fotografia, bez sztucznego 'AI look'."
+    )
+
+    # Uwaga: w zależności od wersji biblioteki, pole może być b64_json
+    resp = client.images.generate(
+        model=IMAGE_MODEL,
+        prompt=prompt,
+        size=IMAGE_SIZE
+    )
+
+    # Najczęściej: resp.data[0].b64_json
+    b64 = None
+    if hasattr(resp, "data") and resp.data:
+        first = resp.data[0]
+        b64 = getattr(first, "b64_json", None) or first.get("b64_json") if isinstance(first, dict) else None
+
+    if not b64:
+        return False
+
+    out_path.parent.mkdir(exist_ok=True, parents=True)
+    out_path.write_bytes(base64.b64decode(b64))
+    return True
 
 # ─────────────────────────────────────────────
 # PROMPTY
@@ -136,10 +178,9 @@ Wynik:
 Pisz po polsku, rzeczowo, bez lania wody. Bez cytowania długich fragmentów.
 """.strip()
 
-
 def _article_prompt(title: str, lead: str, url: str, research: str) -> str:
     return f"""
-Jesteś redaktorem eksperckim GenesManager.pl.
+Jesteś redaktorem medycznym i ekspertem GenesManager.pl.
 
 Na podstawie PONIŻSZEGO RESEARCHU przygotuj AUTORSKI artykuł
 dla właścicieli i managerów placówek medycznych.
@@ -205,6 +246,17 @@ def generate_posts(articles):
         )
         img_desc, img_alt = _parse_image_meta(img_meta_raw)
 
+        # ── ETAP 0.5: GENERACJA OBRAZKA (PNG) ──
+        img_name = f"{idx:03d}_{_safe_filename(title, 50)}.png"
+        img_path = IMAGES_DIR / img_name
+
+        try:
+            ok = _generate_image_png(img_desc, img_path)
+            if not ok:
+                print(f"⚠️ Nie udało się wygenerować obrazu dla: {title}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Błąd generowania obrazu dla '{title}': {e}", flush=True)
+
         # ── ETAP 1: RESEARCH ──
         research = _call_openai(
             [
@@ -225,12 +277,18 @@ def generate_posts(articles):
         )
         html = _clean(html)
 
-        # dodaj IMG placeholder + H1 ręcznie (kontrola)
-        # IMAGE_URL podmieniasz później w pipeline albo ręcznie w WP
+        # H1, a zaraz po nim obrazek (tak jak chcesz)
+        # src jest lokalny: images/xxx.png -> pipeline wrzuci do WP Media i podmieni na URL
+        img_tag = (
+            f'<img src="images/{img_name}" alt="{_escape_html(img_alt)}" loading="lazy" '
+            f'style="max-width:100%;height:auto;margin:16px 0 24px 0;" />\n'
+            if img_path.exists() else
+            ""
+        )
+
         html = (
-            f'<img src="{{IMAGE_URL}}" alt="{_escape_html(img_alt)}" loading="lazy" '
-            f'style="max-width:100%;height:auto;margin-bottom:20px;" />\n'
             f"<h1>{_escape_html(title)}</h1>\n"
+            f"{img_tag}"
             f"{html}"
         )
 
