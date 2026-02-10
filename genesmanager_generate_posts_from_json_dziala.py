@@ -57,6 +57,49 @@ def _escape_html(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 # ─────────────────────────────────────────────
+# ✅ FOTO (opis + ALT + placeholder IMG)
+# ─────────────────────────────────────────────
+def _image_prompt(title: str) -> str:
+    return f"""
+Wymyśl realistyczne, neutralne zdjęcie stockowe pasujące do artykułu:
+„{title}”.
+
+Wymagania:
+- tematyka: ochrona zdrowia, NFZ/MZ, dokumentacja medyczna, zarządzanie placówką, IT w zdrowiu
+- brak logo NFZ/MZ i brak osób publicznych
+- styl: naturalne światło, reportażowe, bez „AI looku”
+- żadnych napisów na zdjęciu (bez banerów, bez tekstu w kadrze)
+
+Zwróć w formacie:
+OPIS: jedno zdanie opisu zdjęcia
+ALT: krótki tekst ALT (SEO-friendly)
+""".strip()
+
+def _parse_image_meta(text: str) -> tuple[str, str]:
+    """
+    Oczekuje:
+    OPIS: ...
+    ALT: ...
+    """
+    t = _clean(text)
+    opis = ""
+    alt = ""
+    m1 = re.search(r"(?im)^\s*OPIS\s*:\s*(.+)\s*$", t)
+    m2 = re.search(r"(?im)^\s*ALT\s*:\s*(.+)\s*$", t)
+    if m1:
+        opis = m1.group(1).strip()
+    if m2:
+        alt = m2.group(1).strip()
+
+    # fallbacki, żeby zawsze coś było
+    if not alt:
+        alt = opis or "Zdjęcie ilustracyjne do artykułu GenesManager"
+    if not opis:
+        opis = alt
+
+    return opis, alt
+
+# ─────────────────────────────────────────────
 # PROMPTY
 # ─────────────────────────────────────────────
 def _research_prompt(title: str, url: str) -> str:
@@ -152,6 +195,16 @@ def generate_posts(articles):
         lead = (art.get("lead") or "").strip()
         url = (art.get("url") or "").strip()
 
+        # ── ETAP 0: FOTO META (opis + ALT) ──
+        img_meta_raw = _call_openai(
+            [
+                {"role": "system", "content": "Jesteś specjalistą od zdjęć stockowych do artykułów branżowych."},
+                {"role": "user", "content": _image_prompt(title)}
+            ],
+            use_primary=True
+        )
+        img_desc, img_alt = _parse_image_meta(img_meta_raw)
+
         # ── ETAP 1: RESEARCH ──
         research = _call_openai(
             [
@@ -172,8 +225,14 @@ def generate_posts(articles):
         )
         html = _clean(html)
 
-        # dodaj H1 ręcznie (kontrola)
-        html = f"<h1>{_escape_html(title)}</h1>\n{html}"
+        # dodaj IMG placeholder + H1 ręcznie (kontrola)
+        # IMAGE_URL podmieniasz później w pipeline albo ręcznie w WP
+        html = (
+            f'<img src="{{IMAGE_URL}}" alt="{_escape_html(img_alt)}" loading="lazy" '
+            f'style="max-width:100%;height:auto;margin-bottom:20px;" />\n'
+            f"<h1>{_escape_html(title)}</h1>\n"
+            f"{html}"
+        )
 
         filename = OUTPUT_DIR / f"{idx:03d}_{_safe_filename(title, 60)}.txt"
         filename.write_text(html, encoding="utf-8")
