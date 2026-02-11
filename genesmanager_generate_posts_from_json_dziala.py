@@ -114,27 +114,37 @@ def _generate_image_png(image_description: str, out_path: Path) -> bool:
     if client is None:
         raise RuntimeError("Brak klienta OpenAI")
 
-    # prompt stricte do obrazu (bez meta)
     prompt = (
         f"Realistyczne zdjęcie stockowe: {image_description}. "
         "Naturalne światło, dokumentalny/biurowy klimat, brak napisów w kadrze, brak logotypów, brak osób publicznych. "
         "Wygląd jak prawdziwa fotografia, bez sztucznego 'AI look'."
     )
 
-    # Uwaga: w zależności od wersji biblioteki, pole może być b64_json
     resp = client.images.generate(
         model=IMAGE_MODEL,
         prompt=prompt,
         size=IMAGE_SIZE
     )
 
-    # Najczęściej: resp.data[0].b64_json
+    # ✅ Poprawione pobieranie b64_json (bez pułapki operator precedence)
     b64 = None
-    if hasattr(resp, "data") and resp.data:
-        first = resp.data[0]
-        b64 = getattr(first, "b64_json", None) or first.get("b64_json") if isinstance(first, dict) else None
+    try:
+        if hasattr(resp, "data") and resp.data:
+            first = resp.data[0]
+
+            # obiekt
+            if hasattr(first, "b64_json") and first.b64_json:
+                b64 = first.b64_json
+
+            # dict
+            elif isinstance(first, dict) and first.get("b64_json"):
+                b64 = first["b64_json"]
+    except Exception as e:
+        print(f"⚠️ Images API: błąd odczytu danych obrazu: {e}", flush=True)
+        b64 = None
 
     if not b64:
+        print("⚠️ Images API: brak b64_json w odpowiedzi (model/uprawnienia/SDK).", flush=True)
         return False
 
     out_path.parent.mkdir(exist_ok=True, parents=True)
@@ -277,8 +287,7 @@ def generate_posts(articles):
         )
         html = _clean(html)
 
-        # H1, a zaraz po nim obrazek (tak jak chcesz)
-        # src jest lokalny: images/xxx.png -> pipeline wrzuci do WP Media i podmieni na URL
+        # Obrazek pod tytułem WP (bez <h1> w treści, żeby nie dublować nagłówka)
         img_tag = (
             f'<img src="images/{img_name}" alt="{_escape_html(img_alt)}" loading="lazy" '
             f'style="max-width:100%;height:auto;margin:16px 0 24px 0;" />\n'
@@ -286,8 +295,8 @@ def generate_posts(articles):
             ""
         )
 
+        # ✅ ZMIANA: usuwamy <h1> z treści
         html = (
-            f"<h1>{_escape_html(title)}</h1>\n"
             f"{img_tag}"
             f"{html}"
         )
