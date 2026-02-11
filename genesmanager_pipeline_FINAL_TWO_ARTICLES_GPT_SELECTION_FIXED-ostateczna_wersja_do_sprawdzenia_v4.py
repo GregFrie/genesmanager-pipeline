@@ -28,6 +28,9 @@ WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD", "")
 API_ENDPOINT = f"{WP_URL}/wp-json/wp/v2/posts" if WP_URL else ""
 AUTH = (WP_USER, WP_APP_PASSWORD) if (WP_USER and WP_APP_PASSWORD) else None
 
+# ✅ (ZMIANA: tylko dodanie endpointu media)
+MEDIA_ENDPOINT = f"{WP_URL}/wp-json/wp/v2/media" if WP_URL else ""
+
 DNI_WSTECZ = 3
 ARTYKULY_NA_ZRODLO = 2
 CUTOFF_DATE = datetime.today() - timedelta(days=DNI_WSTECZ)
@@ -148,6 +151,102 @@ def extract_title_and_body(file_path):
         title = (first_words + "…").strip()
     return title, body
 
+
+# ✅ (ZMIANA: tylko funkcje do zdjęć)
+def _guess_mime(filename: str) -> str:
+    fn = (filename or "").lower()
+    if fn.endswith(".jpg") or fn.endswith(".jpeg"):
+        return "image/jpeg"
+    if fn.endswith(".webp"):
+        return "image/webp"
+    if fn.endswith(".gif"):
+        return "image/gif"
+    return "image/png"
+
+
+def _upload_media_to_wp(image_path: Path, title: str):
+    """
+    Upload do /media. Zwraca (source_url, media_id) albo (None, None).
+    """
+    if not (MEDIA_ENDPOINT and AUTH):
+        return None, None
+    if not image_path.exists():
+        return None, None
+
+    mime = _guess_mime(image_path.name)
+    headers_media = {
+        "Accept": "application/json",
+        "Content-Disposition": f'attachment; filename="{image_path.name}"',
+        "Content-Type": mime,
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": "GenesManager/1.0 (+requests)"
+    }
+
+    try:
+        with image_path.open("rb") as f:
+            resp = requests.post(MEDIA_ENDPOINT, auth=AUTH, headers=headers_media, data=f.read(), timeout=60)
+    except Exception as e:
+        print(f"❌ Upload media wyjątek {image_path.name}: {e}")
+        return None, None
+
+    if resp.status_code not in (200, 201):
+        preview = (resp.text or "")[:400].replace("\n", " ")
+        print(f"❌ Upload media failed ({resp.status_code}) {image_path.name}: {preview}")
+        return None, None
+
+    try:
+        data = resp.json()
+        return data.get("source_url"), data.get("id")
+    except Exception:
+        return None, None
+
+
+def _replace_local_images_with_wp_urls(body_html: str, title: str):
+    """
+    Podmienia src="images/..." -> URL z WP po uploadzie pliku z output_posts/images/.
+    Zwraca (body_html_po, featured_media_id_lub_None)
+    """
+    if not body_html:
+        return body_html, None
+
+    images_dir = POST_DIR / "images"
+    if not images_dir.exists():
+        return body_html, None
+
+    # src="images/xxx.png" lub src='images/xxx.png'
+    pattern = r"""src=(["'])(images/[^"']+)\1"""
+    matches = list(re.finditer(pattern, body_html, flags=re.IGNORECASE))
+    if not matches:
+        return body_html, None
+
+    out = body_html
+    featured_media_id = None
+
+    for m in matches:
+        local_rel = m.group(2)  # images/xxx.png
+        local_name = local_rel.split("/", 1)[1] if "/" in local_rel else local_rel
+        local_path = images_dir / local_name
+
+        source_url, media_id = _upload_media_to_wp(local_path, title)
+        if not source_url:
+            continue
+
+        if featured_media_id is None and media_id:
+            featured_media_id = media_id
+
+        # podmień tylko pierwszy pasujący fragment (dla tej iteracji)
+        out = re.sub(
+            r"""src=(["'])%s\1""" % re.escape(local_rel),
+            f'src="{source_url}"',
+            out,
+            count=1,
+            flags=re.IGNORECASE
+        )
+
+    return out, featured_media_id
+
+
 def publish_to_wordpress():
     if not POST_DIR.exists():
         print(f"❌ Folder {POST_DIR} nie istnieje.")
@@ -199,7 +298,14 @@ def publish_to_wordpress():
     for file in sorted(POST_DIR.glob("*.txt")):
         title, body = extract_title_and_body(file)
         if title and body:
-            payload = {"title": title, "content": body, "status": "publish"}
+
+            # ✅ (ZMIANA: tylko tu – upload/podmiana obrazka + featured_media)
+            body2, featured_media_id = _replace_local_images_with_wp_urls(body, title)
+
+            payload = {"title": title, "content": body2, "status": "publish"}
+            if featured_media_id:
+                payload["featured_media"] = featured_media_id
+
             resp = _post_with_fallback(payload)
             if resp.status_code == 201:
                 print(f"✅ Opublikowano: {title}")
