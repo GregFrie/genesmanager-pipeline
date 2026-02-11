@@ -7,9 +7,11 @@ import time
 import subprocess
 import requests
 import shutil
+import re
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
+
 try:
     from openai import OpenAI
 except Exception:
@@ -28,7 +30,6 @@ WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD", "")
 API_ENDPOINT = f"{WP_URL}/wp-json/wp/v2/posts" if WP_URL else ""
 AUTH = (WP_USER, WP_APP_PASSWORD) if (WP_USER and WP_APP_PASSWORD) else None
 
-# ✅ (ZMIANA: tylko dodanie endpointu media)
 MEDIA_ENDPOINT = f"{WP_URL}/wp-json/wp/v2/media" if WP_URL else ""
 
 DNI_WSTECZ = 3
@@ -58,7 +59,6 @@ def is_recent(article_date_str):
     except Exception:
         return False
 
-# Helpers to ensure non-empty fields
 def _safe_title(a):
     return (a.get("title") or a.get("lead") or a.get("url") or "").strip()
 
@@ -66,12 +66,44 @@ def _safe_lead(a):
     return (a.get("lead") or a.get("title") or "").strip()
 
 # ─────────────────────────────────────────────
+# ✅ FIX 1: twarde parsowanie indeksów z GPT (obsługa ```json ...```)
+# ─────────────────────────────────────────────
+def _parse_indices_from_gpt(content: str):
+    if not content:
+        return None
+    c = content.strip()
+
+    # usuń code fence jeśli jest
+    c = re.sub(r"^\s*```(?:json)?\s*", "", c, flags=re.I)
+    c = re.sub(r"\s*```\s*$", "", c)
+
+    # wyciągnij pierwszą listę typu [1, 4]
+    m = re.search(r"\[[\s\d,]+\]", c)
+    if not m:
+        return None
+
+    try:
+        arr = json.loads(m.group(0))
+        if isinstance(arr, list):
+            # tylko inty
+            out = []
+            for x in arr:
+                try:
+                    out.append(int(x))
+                except Exception:
+                    pass
+            return out
+    except Exception:
+        return None
+
+    return None
+
+# ─────────────────────────────────────────────
 # 🧠 4. Wybór artykułów przez GPT z retry i logowaniem
 # ─────────────────────────────────────────────
 def pick_most_relevant_articles(all_articles, n=2, retries=2):
     recent_articles = [a for a in all_articles if is_recent(a.get("date", ""))]
 
-    # Uzupełnij braki tytułów/leadów PRZED wysłaniem do GPT
     for a in recent_articles:
         if not (a.get("title") or "").strip():
             a["title"] = _safe_title(a) or f"Aktualność {a.get('source','') or ''} {a.get('date','') or ''}".strip()
@@ -88,12 +120,12 @@ def pick_most_relevant_articles(all_articles, n=2, retries=2):
             "Jesteś doświadczonym redaktorem medycznym. Spośród poniższych artykułów wybierz dokładnie 2, "
             "które są najważniejsze dla właścicieli i managerów placówek medycznych. "
             "Priorytetowo traktuj informacje o postępowaniach konkursowych NFZ oraz o zmianach w przepisach (NFZ, MZ, RCL). "
-            "Podaj tylko numery wybranych pozycji jako listę JSON, np. [1, 4]\n\n"
+            "Podaj tylko numery wybranych pozycji jako listę JSON, np. [1, 4]. "
+            "Nie używaj ``` ani żadnych komentarzy.\n\n"
         )
         for i, a in enumerate(unpub, 1):
             prompt += f"{i}. {a['title']} — {a.get('lead','')}\n"
 
-        # Debug listy podawanej do GPT
         print("\n📋 Po odfiltrowaniu mamy", len(unpub), "nieopublikowanych artykułów")
         for i, a in enumerate(unpub, 1):
             print(f"{i}. {a['title']}")
@@ -101,6 +133,7 @@ def pick_most_relevant_articles(all_articles, n=2, retries=2):
         try:
             if client is None:
                 raise RuntimeError("Brak klienta OpenAI (OPENAI_API_KEY lub biblioteka)")
+
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -109,19 +142,20 @@ def pick_most_relevant_articles(all_articles, n=2, retries=2):
                 ],
                 temperature=0.3
             )
+
             content = response.choices[0].message.content.strip() if response.choices else ""
             print(f"🔹 Debug GPT response (attempt {attempt+1}): {repr(content)}")
-            if not content:
+
+            indices = _parse_indices_from_gpt(content)
+            if not indices:
+                print("⚠️ Nie udało się sparsować indeksów, retry...")
                 time.sleep(2)
                 continue
-            try:
-                indices = json.loads(content)
-                chosen = [unpub[i - 1] for i in indices if 0 < i <= len(unpub)]
-                if chosen:
-                    return chosen[:n]
-            except json.JSONDecodeError:
-                print("⚠️ Nie udało się sparsować JSON, retry...")
-                time.sleep(2)
+
+            chosen = [unpub[i - 1] for i in indices if 0 < i <= len(unpub)]
+            if chosen:
+                return chosen[:n]
+
         except Exception as e:
             print(f"⚠️ Błąd przy wyborze przez AI (attempt {attempt+1}): {e}")
             time.sleep(2)
@@ -135,24 +169,28 @@ def pick_most_relevant_articles(all_articles, n=2, retries=2):
 from genesmanager_generate_posts_from_json_dziala import generate_posts
 
 # ─────────────────────────────────────────────
-# 🌐 6. Publikacja na WordPress — 415-proof
+# ✅ FIX 2: poprawne pobieranie tytułu i treści z pliku .txt
+# Generator NIE zapisuje już <h1> jako pierwszej linii.
+# Tytuł bierzemy z nazwy pliku: 001_Tytul.txt -> "Tytul"
 # ─────────────────────────────────────────────
-def extract_title_and_body(file_path):
-    with open(file_path, "r", encoding="utf-8") as f:
-        text = f.read().strip()
-    if not text:
+def _title_from_filename(file_path: Path) -> str:
+    name = file_path.stem  # bez .txt
+    # usuń prefix "001_" jeśli jest
+    name = re.sub(r"^\d{3}_", "", name)
+    # zamień _ na spacje
+    name = name.replace("_", " ").strip()
+    return name or "Aktualność GenesManager"
+
+def extract_title_and_body(file_path: Path):
+    body = file_path.read_text(encoding="utf-8").strip()
+    if not body:
         return None, None
-    lines = text.splitlines()
-    title = (lines[0] or "").replace("#", "").replace("<h1>", "").replace("</h1>", "").strip()
-    body = "\n".join(lines[1:]).strip()
-    if not title:
-        # awaryjny tytuł z treści, ~10 słów
-        first_words = " ".join((body.split()[:10] if body else ["Aktualność", "GenesManager"]))
-        title = (first_words + "…").strip()
+    title = _title_from_filename(file_path)
     return title, body
 
-
-# ✅ (ZMIANA: tylko funkcje do zdjęć)
+# ─────────────────────────────────────────────
+# Funkcje do zdjęć (bez zmian)
+# ─────────────────────────────────────────────
 def _guess_mime(filename: str) -> str:
     fn = (filename or "").lower()
     if fn.endswith(".jpg") or fn.endswith(".jpeg"):
@@ -163,11 +201,7 @@ def _guess_mime(filename: str) -> str:
         return "image/gif"
     return "image/png"
 
-
 def _upload_media_to_wp(image_path: Path, title: str):
-    """
-    Upload do /media. Zwraca (source_url, media_id) albo (None, None).
-    """
     if not (MEDIA_ENDPOINT and AUTH):
         return None, None
     if not image_path.exists():
@@ -201,12 +235,7 @@ def _upload_media_to_wp(image_path: Path, title: str):
     except Exception:
         return None, None
 
-
 def _replace_local_images_with_wp_urls(body_html: str, title: str):
-    """
-    Podmienia src="images/..." -> URL z WP po uploadzie pliku z output_posts/images/.
-    Zwraca (body_html_po, featured_media_id_lub_None)
-    """
     if not body_html:
         return body_html, None
 
@@ -214,7 +243,6 @@ def _replace_local_images_with_wp_urls(body_html: str, title: str):
     if not images_dir.exists():
         return body_html, None
 
-    # src="images/xxx.png" lub src='images/xxx.png'
     pattern = r"""src=(["'])(images/[^"']+)\1"""
     matches = list(re.finditer(pattern, body_html, flags=re.IGNORECASE))
     if not matches:
@@ -224,7 +252,7 @@ def _replace_local_images_with_wp_urls(body_html: str, title: str):
     featured_media_id = None
 
     for m in matches:
-        local_rel = m.group(2)  # images/xxx.png
+        local_rel = m.group(2)
         local_name = local_rel.split("/", 1)[1] if "/" in local_rel else local_rel
         local_path = images_dir / local_name
 
@@ -235,7 +263,6 @@ def _replace_local_images_with_wp_urls(body_html: str, title: str):
         if featured_media_id is None and media_id:
             featured_media_id = media_id
 
-        # podmień tylko pierwszy pasujący fragment (dla tej iteracji)
         out = re.sub(
             r"""src=(["'])%s\1""" % re.escape(local_rel),
             f'src="{source_url}"',
@@ -246,7 +273,9 @@ def _replace_local_images_with_wp_urls(body_html: str, title: str):
 
     return out, featured_media_id
 
-
+# ─────────────────────────────────────────────
+# Publikacja (bez zmian)
+# ─────────────────────────────────────────────
 def publish_to_wordpress():
     if not POST_DIR.exists():
         print(f"❌ Folder {POST_DIR} nie istnieje.")
@@ -272,12 +301,10 @@ def publish_to_wordpress():
     }
 
     def _post_with_fallback(payload):
-        # 1) JSON
         resp = requests.post(API_ENDPOINT, auth=AUTH, headers=headers_json, json=payload, timeout=30)
         if resp.status_code == 201:
             return resp
 
-        # 2) raw JSON w body
         if resp.status_code in (400, 403, 404, 406, 415, 500):
             resp2 = requests.post(
                 API_ENDPOINT, auth=AUTH, headers=headers_json,
@@ -286,7 +313,6 @@ def publish_to_wordpress():
             if resp2.status_code == 201:
                 return resp2
 
-            # 3) application/x-www-form-urlencoded
             resp3 = requests.post(
                 API_ENDPOINT, auth=AUTH, headers=headers_form,
                 data={"title": payload["title"], "content": payload["content"], "status": payload["status"]},
@@ -298,8 +324,6 @@ def publish_to_wordpress():
     for file in sorted(POST_DIR.glob("*.txt")):
         title, body = extract_title_and_body(file)
         if title and body:
-
-            # ✅ (ZMIANA: tylko tu – upload/podmiana obrazka + featured_media)
             body2, featured_media_id = _replace_local_images_with_wp_urls(body, title)
 
             payload = {"title": title, "content": body2, "status": "publish"}
