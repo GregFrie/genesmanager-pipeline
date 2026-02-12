@@ -26,7 +26,7 @@ IMAGES_DIR.mkdir(exist_ok=True)
 PRIMARY_MODEL = "gpt-5"
 FALLBACK_MODEL = "gpt-4o-mini"
 
-# Model do obrazów (najczęściej działa jako gpt-image-1)
+# Model do obrazów
 IMAGE_MODEL = "gpt-image-1"
 IMAGE_SIZE = "1024x1024"
 
@@ -84,11 +84,6 @@ ALT: krótki tekst ALT (SEO-friendly)
 """.strip()
 
 def _parse_image_meta(text: str) -> tuple[str, str]:
-    """
-    Oczekuje:
-    OPIS: ...
-    ALT: ...
-    """
     t = _clean(text)
     opis = ""
     alt = ""
@@ -107,10 +102,6 @@ def _parse_image_meta(text: str) -> tuple[str, str]:
     return opis, alt
 
 def _generate_image_png(image_description: str, out_path: Path) -> bool:
-    """
-    Generuje obraz (PNG) przez OpenAI Images API i zapisuje do out_path.
-    Zwraca True jeśli się udało.
-    """
     if client is None:
         raise RuntimeError("Brak klienta OpenAI")
 
@@ -126,17 +117,12 @@ def _generate_image_png(image_description: str, out_path: Path) -> bool:
         size=IMAGE_SIZE
     )
 
-    # ✅ Poprawione pobieranie b64_json (bez pułapki operator precedence)
     b64 = None
     try:
         if hasattr(resp, "data") and resp.data:
             first = resp.data[0]
-
-            # obiekt
             if hasattr(first, "b64_json") and first.b64_json:
                 b64 = first.b64_json
-
-            # dict
             elif isinstance(first, dict) and first.get("b64_json"):
                 b64 = first["b64_json"]
     except Exception as e:
@@ -152,11 +138,50 @@ def _generate_image_png(image_description: str, out_path: Path) -> bool:
     return True
 
 # ─────────────────────────────────────────────
+# ✅ H1 GENERATOR (redakcyjny, kontrolowany)
+# ─────────────────────────────────────────────
+def _h1_prompt(source_title: str, lead: str, url: str) -> str:
+    lead_part = f"\nLead (jeśli jest): {lead}\n" if lead else "\n"
+    return f"""
+Na podstawie tematu (tytuł źródła):
+„{source_title}”
+{lead_part}
+Wygeneruj profesjonalny, redakcyjny nagłówek artykułu dla właścicieli i managerów placówek medycznych.
+
+Wymagania:
+- maks. 140 znaków
+- nie kopiuj tytułu źródła (ma być parafraza/inna konstrukcja)
+- bez dat
+- bez cudzysłowów
+- bez wykrzykników
+- nie zaczynaj od "Komunikat" ani "Informacja"
+- jeśli dotyczy kontraktowania/konkursów NFZ lub rozliczeń, użyj wprost "NFZ" w nagłówku
+
+Zwróć WYŁĄCZNIE sam tekst nagłówka (bez HTML).
+""".strip()
+
+def _generate_h1(source_title: str, lead: str, url: str) -> str:
+    txt = _call_openai(
+        [
+            {"role": "system", "content": "Jesteś redaktorem medycznym. Tworzysz zwięzłe, trafne nagłówki."},
+            {"role": "user", "content": _h1_prompt(source_title, lead, url)}
+        ],
+        use_primary=False
+    )
+    txt = _clean(txt)
+    txt = re.sub(r"[\"“”]", "", txt).strip()
+    # awaryjnie, jeśli model zwróci HTML lub puste
+    txt = re.sub(r"<[^>]+>", "", txt).strip()
+    if not txt:
+        txt = source_title.strip() or "Aktualność GenesManager"
+    return txt
+
+# ─────────────────────────────────────────────
 # PROMPTY
 # ─────────────────────────────────────────────
 def _research_prompt(title: str, url: str) -> str:
     return f"""
-Jesteś analitykiem systemu ochrony zdrowia i redaktorem GenesManager.pl.
+Jesteś analitykiem systemu ochrony zdrowia i redaktorem medycznym GenesManager.pl.
 
 Cel: przygotuj NOTATKI ANALITYCZNE (nie do publikacji) do artykułu na temat:
 „{title}”.
@@ -166,10 +191,11 @@ Zasada nadrzędna: TRZYMAJ SIĘ WYŁĄCZNIE TEGO TEMATU.
 - Jeśli trafisz na wątek poboczny, uwzględnij go tylko wtedy, gdy ma bezpośredni wpływ na temat (1–2 zdania max).
 
 Priorytety analizy (od najważniejszego):
-1) Wpływ na NFZ: kontraktowanie, ogłoszenia konkursowe, warunki realizacji umów, sprawozdawczość, rozliczenia, ryzyka korekt/zwrotów.
+1) Wpływ na NFZ: kontraktowanie, ogłoszenia konkursowe, warunki realizacji umów, sprawozdawczość, rozliczenia, ryzyka korekt/zwrotów - tylko jeśli dotyczy tego tematu.
 2) Wpływ na finansowanie i dofinansowania: programy, dotacje, środki UE/KPO, MZ/Agencje, fundusze celowe – o ile dotyczą tego tematu.
-3) Wpływ operacyjny: organizacja pracy, wymagania kadrowe, procedury, dokumentacja, IT (P1, e-ZLA, RPWDL, gabinety), RODO.
+3) Wpływ operacyjny: organizacja pracy, wymagania kadrowe, procedury, dokumentacja, RPWDL, RODO.
 4) Wpływ prawny i compliance: ustawy/rozporządzenia/zarządzenia/komunikaty, wymagania formalne, ryzyka interpretacyjne.
+Nie staraj się na siłę dopasować artykułu do powyższych tematów. Stosuj priorytet analizy w takim zakresie w jakim dotyczy to danego tmatu.
 
 Źródła:
 - Traktuj link poniżej jako punkt startowy.
@@ -205,29 +231,27 @@ Wymagania kluczowe:
    - NIE używaj <h2>.
 4) Nagłówki sekcji:
    - Sam dobierz 5–8 nagłówków <h4> adekwatnych do treści.
-   - Nagłówki mają brzmieć naturalnie i redakcyjnie (jak w dobrym artykule branżowym), a nie jak lista kontrolna.
-   - NIE wolno używać w nagłówkach sformułowań przeniesionych z prompta lub „formatu notatek” (np. „konsekwencje dla NFZ”, „co monitorować”, „ryzyka i typowe błędy” itp.).
-   - Unikaj powtarzania tych samych nazw nagłówków w kolejnych artykułach: każde <h4> ma być możliwie unikalne dla tematu.
-   - Technika: najpierw napisz całą treść w akapitach, a dopiero potem nazwij sekcje krótkimi tytułami <h4> pasującymi do już napisanego tekstu.
+   - Nagłówki mają brzmieć naturalnie i redakcyjnie, a nie jak lista kontrolna.
+   - NIE wolno używać w nagłówkach sformułowań z prompta (np. „konsekwencje dla NFZ”, „co monitorować”, „ryzyka…”).
+   - Unikaj powtarzania tych samych nazw nagłówków w kolejnych artykułach.
+   - Technika: najpierw napisz treść, a dopiero potem nazwij sekcje krótkimi tytułami <h4>.
    - Tytuł artykułu MA BYĆ INNY niż tytuł źródła.
 5) Styl:
-   - dobra, profesjonalna polszczyzna,
-   - pełne zdania, logiczne łączenia myśli,
+   - profesjonalna polszczyzna,
    - krótkie akapity (1–3 zdania),
    - ma być „do czytania”, a nie sama checklista.
 6) Listy:
    - maksymalnie 1 lista <ul> w całym tekście,
-   - maksymalnie 5 punktów,
-   - reszta w normalnych akapitach.
+   - maksymalnie 5 punktów.
 7) Treść:
    - minimum 3500 znaków,
    - nie wymyślaj liczb i faktów; jeśli źródło nie daje detali, zaznacz to ostrożnie.
-8) Wpleć naturalnie maksymalnie 2 linki (HTML) do usług GenesManager — tylko jeśli pasują kontekstowo:
+8) Wpleć naturalnie maksymalnie 2 linki (HTML) do usług GenesManager — tylko jeśli pasują:
    - https://genesmanager.pl/rozliczenia-z-nfz/
    - https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/
    - https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/
    - https://genesmanager.pl/rejestracja-podmiotu-leczniczego/
-   Linki mają wyglądać tak: <a href="...">tekst linku</a>
+   Linki: <a href="...">tekst linku</a>
 
 Na końcu:
 <h4>Źródło</h4>
@@ -242,36 +266,39 @@ Zwróć wyłącznie HTML.
 # ─────────────────────────────────────────────
 def generate_posts(articles):
     for idx, art in enumerate(articles, 1):
-        title = (art.get("title") or f"Aktualność {idx}").strip()
+        source_title = (art.get("title") or f"Aktualność {idx}").strip()
         lead = (art.get("lead") or "").strip()
         url = (art.get("url") or "").strip()
+
+        # ✅ H1 do publikacji: generujemy redakcyjny, kontrolowany
+        h1_text = _generate_h1(source_title, lead, url)
 
         # ── ETAP 0: FOTO META (opis + ALT) ──
         img_meta_raw = _call_openai(
             [
                 {"role": "system", "content": "Jesteś specjalistą od zdjęć stockowych do artykułów branżowych."},
-                {"role": "user", "content": _image_prompt(title)}
+                {"role": "user", "content": _image_prompt(h1_text)}
             ],
             use_primary=True
         )
         img_desc, img_alt = _parse_image_meta(img_meta_raw)
 
         # ── ETAP 0.5: GENERACJA OBRAZKA (PNG) ──
-        img_name = f"{idx:03d}_{_safe_filename(title, 50)}.png"
+        img_name = f"{idx:03d}_{_safe_filename(h1_text, 50)}.png"
         img_path = IMAGES_DIR / img_name
 
         try:
             ok = _generate_image_png(img_desc, img_path)
             if not ok:
-                print(f"⚠️ Nie udało się wygenerować obrazu dla: {title}", flush=True)
+                print(f"⚠️ Nie udało się wygenerować obrazu dla: {h1_text}", flush=True)
         except Exception as e:
-            print(f"⚠️ Błąd generowania obrazu dla '{title}': {e}", flush=True)
+            print(f"⚠️ Błąd generowania obrazu dla '{h1_text}': {e}", flush=True)
 
-        # ── ETAP 1: RESEARCH ──
+        # ── ETAP 1: RESEARCH (na podstawie tytułu źródła) ──
         research = _call_openai(
             [
                 {"role": "system", "content": "Jesteś analitykiem ochrony zdrowia."},
-                {"role": "user", "content": _research_prompt(title, url)}
+                {"role": "user", "content": _research_prompt(source_title, url)}
             ],
             use_primary=True
         )
@@ -281,13 +308,16 @@ def generate_posts(articles):
         html = _call_openai(
             [
                 {"role": "system", "content": "Piszesz po polsku. Zwracasz wyłącznie HTML."},
-                {"role": "user", "content": _article_prompt(title, lead, url, research)}
+                {"role": "user", "content": _article_prompt(source_title, lead, url, research)}
             ],
             use_primary=True
         )
         html = _clean(html)
 
-        # Obrazek pod tytułem WP (bez <h1> w treści, żeby nie dublować nagłówka)
+        # usuń ewentualny H1 z treści jeśli model go mimo wszystko wstawi
+        html = re.sub(r"<h1[^>]*>.*?</h1>\s*", "", html, flags=re.I | re.S).strip()
+
+        # obrazek pod H1 (pipeline wrzuci do WP Media i podmieni na URL)
         img_tag = (
             f'<img src="images/{img_name}" alt="{_escape_html(img_alt)}" loading="lazy" '
             f'style="max-width:100%;height:auto;margin:16px 0 24px 0;" />\n'
@@ -295,13 +325,15 @@ def generate_posts(articles):
             ""
         )
 
-        # ✅ ZMIANA: usuwamy <h1> z treści
-        html = (
+        # ✅ Final: H1 jest pierwszym elementem w pliku
+        final_html = (
+            f"<h1>{_escape_html(h1_text)}</h1>\n"
             f"{img_tag}"
             f"{html}"
         )
 
-        filename = OUTPUT_DIR / f"{idx:03d}_{_safe_filename(title, 60)}.txt"
-        filename.write_text(html, encoding="utf-8")
+        # plik: krótki slug, ale H1 w środku jest pełny (pipeline bierze title z H1)
+        filename = OUTPUT_DIR / f"{idx:03d}_{_safe_filename(h1_text, 60)}.txt"
+        filename.write_text(final_html, encoding="utf-8")
 
         print(f"✅ Wygenerowano: {filename.name}", flush=True)
