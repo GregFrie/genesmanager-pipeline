@@ -86,14 +86,14 @@ def _safe_lead(a):
 # ─────────────────────────────────────────────
 PRIO_KEYWORDS = [
     # kontraktowanie / konkursy / umowy
-    "konkurs", "postępowan", "ogłoszen", "kontrakt", "umow", "aneks",
-    "świadczeniodawc", "zawarcie umowy", "warunki realizacji", "zarządzenie prezesa nfz",
-    "komunikat nfz", "sprawozdawczo", "rozliczen", "korekt", "zwrot",
-    "wycena", "taryf", "aotmit", "limity", "budżet", "stawki", "ryczałt",
+    "konkurs", "postępowanie", "ogłoszenie postępownia", "kontrakty", "umowy", "aneks",
+    "świadczeniodawca", "zawarcie umowy", "warunki realizacji", "zarządzenie prezesa nfz",
+    "komunikat nfz", "sprawozdawczość", "rozliczenia", "korekty", "zwroty",
+    "wycena", "taryfy", "limity", "budżet", "stawki", "ryczałt",
 
     # finansowanie / dofinansowania
-    "dofinansowan", "dotacj", "grant", "subwencj", "kpo", "fundusz", "środki",
-    "nabór", "program", "finansowan", "refundac",
+    "dofinansowania", "dotacje", "granty", "subwencje", "kpo", "fundusz", "środki",
+    "nabór", "program", "finansowanie", "refundacja",
 ]
 
 def _prio_score(article: dict) -> int:
