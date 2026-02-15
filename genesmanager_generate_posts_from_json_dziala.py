@@ -107,7 +107,7 @@ def _generate_image_png(image_description: str, out_path: Path) -> bool:
 
     prompt = (
         f"Realistyczne zdjęcie stockowe: {image_description}. "
-        "Naturalne światło, dokumentalny/biurowy klimat, brak napisów w kadrze, brak logotypów, brak osób publicznych. "
+        "Naturalne światło, klimat i to co przedstawia zdjęcie ma być dobrane do tematu artukułu, brak napisów w kadrze, brak logotypów, brak osób publicznych. "
         "Wygląd jak prawdziwa fotografia, bez sztucznego 'AI look'."
     )
 
@@ -230,8 +230,8 @@ Wymagania kluczowe:
 3) Używaj tylko tagów: <h3>, <h4>, <p>, <strong>, <ul>, <li>, <a>.
    - NIE używaj <h2>.
 4) Nagłówki sekcji:
-   - Sam dobierz 5–8 nagłówków <h4> adekwatnych do treści.
-   - Nagłówki mają brzmieć naturalnie i redakcyjnie, a nie jak lista kontrolna.
+   - Sam dobierz 5–8 nagłówków <h4> adekwatnych do treści. Nagłówki mają odzwierciedlać to co jest w treści atrykółu którego dotyczą.
+   - Nagłówki mają brzmieć naturalnie, być ciekawe, zachęcać do przeczytania tego czego dotyczą i być redakcyjne, a nie jak lista kontrolna.
    - NIE wolno używać w nagłówkach sformułowań z prompta (np. „konsekwencje dla NFZ”, „co monitorować”, „ryzyka…”).
    - Unikaj powtarzania tych samych nazw nagłówków w kolejnych artykułach.
    - Technika: najpierw napisz treść, a dopiero potem nazwij sekcje krótkimi tytułami <h4>.
@@ -239,7 +239,7 @@ Wymagania kluczowe:
 5) Styl:
    - profesjonalna polszczyzna,
    - krótkie akapity (1–3 zdania),
-   - ma być „do czytania”, a nie sama checklista.
+   - ma być interesujący i „do czytania”, a nie sama checklista.
 6) Listy:
    - maksymalnie 1 lista <ul> w całym tekście,
    - maksymalnie 5 punktów.
@@ -337,3 +337,4 @@ def generate_posts(articles):
         filename.write_text(final_html, encoding="utf-8")
 
         print(f"✅ Wygenerowano: {filename.name}", flush=True)
+
