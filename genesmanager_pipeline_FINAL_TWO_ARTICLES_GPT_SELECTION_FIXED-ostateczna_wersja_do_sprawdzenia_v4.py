@@ -487,7 +487,7 @@ def publish_to_wordpress():
             "title": title,
             "content": body2,
             "status": "publish",
-            "meta": {"_yoast_wpseo_metadesc": meta_desc},
+            "_yoast_wpseo_metadesc": meta_desc,
         }
         if featured_media_id:
             payload["featured_media"] = featured_media_id

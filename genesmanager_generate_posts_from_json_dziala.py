@@ -233,13 +233,17 @@ Wymagania kluczowe:
 3) Używaj tylko tagów: <h3>, <h4>, <p>, <strong>, <ul>, <li>, <a>.
    - NIE używaj <h2>.
 4) Nagłówki sekcji <h4>:
+   - LIMIT: MAKSYMALNIE 8 nagłówków <h4> w całym artykule (nie licząc sekcji „Źródło”).
+     Przed zwróceniem odpowiedzi POLICZ tagi <h4> — jeśli jest ich więcej niż 8, połącz sekcje.
    - TECHNIKA: napisz najpierw CAŁĄ treść, a dopiero potem dobierz nagłówki do gotowych sekcji.
    - Każdy nagłówek opisuje KONKRETNĄ treść swojej sekcji — nie ogólne kategorie tematyczne.
    - Nagłówek = wyrażenie rzeczownikowe lub zdanie twierdzące, 4–9 słów.
-   - ZAKAZ używania tych słów i zwrotów:
+   - ZAKAZ używania tych słów i zwrotów (żadna odmiana):
      „Co to oznacza”, „Podsumowanie”, „Wnioski”, „Kontekst”, „Tło sprawy”,
      „Dla kogo”, „Co dalej”, „Dlaczego to ważne”, „Praktyczne wskazówki”,
-     „Konsekwencje dla…”, „Co monitorować”, „Ryzyka”, „Zmiany”.
+     „Konsekwencje dla…”, „błędy”, „monitorować”, „monitoring”, „Ryzyka”, „Zmiany”,
+     „Pięć…”, „Cztery…”, „Trzy…” (wszelkie nagłówki z liczebnikiem + czynność),
+     „wsparcie zewnętrzne”, „rekomendowane”, „Co warto”.
    - WZORZEC dobrego nagłówka (konkretny, charakterystyczny dla tematu):
      ✓ „Termin składania wniosków upływa 28 lutego”
      ✓ „NFZ zwiększa wycenę punktu rozliczeniowego o 12%”
