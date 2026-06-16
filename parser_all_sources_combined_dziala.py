@@ -258,6 +258,8 @@ def _extract_nfz_oddzialy(soup: BeautifulSoup) -> list[dict]:
                 href = "https://www.nfz.gov.pl" + href
             date_el = box.select_one("div.date, span.date, time")
             date_str = _date_from_el(date_el)
+            if date_str and not _is_recent(date_str):
+                continue
             out.append({"title": title, "url": href,
                         "date": date_str or datetime.today().strftime("%Y-%m-%d"),
                         "source": "NFZ Oddziały"})
@@ -288,36 +290,48 @@ def parse_nfz_oddzialy_articles() -> list[dict]:
 # gov.pl / MZ (Ministerstwo Zdrowia)
 # ──────────────────────────────────────────────────────────
 def _extract_govpl(soup: BeautifulSoup) -> list[dict]:
+    """
+    gov.pl /web/zdrowie/wiadomosci — artykuły mają .title + .intro + .date.
+    Elementy nawigacji ich nie mają → odrzucamy wszystko bez daty lub bez intro.
+    """
     out = []
-    # gov.pl lista wiadomości — próbujemy kilka selektorów
-    for li in soup.select("ul.gov-article-list li, ul li, article"):
+    seen: set[str] = set()
+
+    # Szukamy list-itemów z pełnym zestawem pól artykułu
+    for li in soup.select("ul li, article, div.article-list-item"):
         try:
+            # data jest wymagana — bez niej to menu/nav, nie artykuł
+            date_el = li.select_one(".date, time[datetime], span.date, .timestamp")
+            if not date_el:
+                continue
+            date_str = _date_from_el(date_el)
+            if not date_str:
+                continue
+            if not _is_recent(date_str):
+                continue
+
             a = li.select_one("a[href]")
             if not a:
                 continue
             href = (a.get("href") or "").strip()
-            if not href or href.startswith("#"):
+            if not href or href.startswith("#") or href in seen:
                 continue
             if not href.startswith("http"):
                 href = "https://www.gov.pl" + href
+            seen.add(href)
 
             title_el = li.select_one(".title, h3, h2, h4")
             title = (title_el.get_text(strip=True) if title_el
                      else a.get_text(strip=True)) or "Aktualizacja MZ"
-            if not title or title == href:
+            # pomiń placeholder-tytuły i nagłówki sekcji nav
+            if len(title) < 20:
                 continue
 
             intro_el = li.select_one(".intro, .description, .lead, p")
             intro = intro_el.get_text(" ", strip=True) if intro_el else ""
 
-            date_el = li.select_one(".date, time, span.date, .timestamp")
-            date_str = _date_from_el(date_el)
-            if date_str and not _is_recent(date_str):
-                continue
-
             out.append({"title": title, "lead": intro, "url": href,
-                        "date": date_str or datetime.today().strftime("%Y-%m-%d"),
-                        "source": "gov.pl"})
+                        "date": date_str, "source": "gov.pl"})
         except Exception:
             continue
     return out
