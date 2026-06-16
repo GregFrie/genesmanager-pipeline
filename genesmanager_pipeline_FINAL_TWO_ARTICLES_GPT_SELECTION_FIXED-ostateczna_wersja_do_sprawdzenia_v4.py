@@ -31,36 +31,110 @@ API_ENDPOINT = f"{WP_URL}/wp-json/wp/v2/posts" if WP_URL else ""
 AUTH = (WP_USER, WP_APP_PASSWORD) if (WP_USER and WP_APP_PASSWORD) else None
 
 MEDIA_ENDPOINT = f"{WP_URL}/wp-json/wp/v2/media" if WP_URL else ""
+CATS_ENDPOINT  = f"{WP_URL}/wp-json/wp/v2/categories" if WP_URL else ""
 
 DNI_WSTECZ = 3
 CUTOFF_DATE = datetime.today() - timedelta(days=DNI_WSTECZ)
 
-PUBLISHED_TITLES_PATH = Path("published_posts.json")   # przechowujemy klucze publikacji (URL; fallback: title)
 ARTICLES_JSON_PATH = Path("all_articles_combined.json")
 POST_DIR = Path("output_posts")
 
 # ─────────────────────────────────────────────
-# ✅ DEDUPE: po URL (fallback: title)
+# ✅ DEDUPE: sprawdzamy WP REST API (bez pliku lokalnego)
+#    Szukamy source URL w treści ostatnich 30 postów.
+#    Render ma efemeryczny dysk — plik JSON byłby czyszczony przy każdym deployu.
 # ─────────────────────────────────────────────
-def _load_published_set() -> set:
-    if not PUBLISHED_TITLES_PATH.exists():
-        return set()
+_wp_recent_contents: list[str] | None = None   # cache na czas jednego uruchomienia
+
+
+def _fetch_recent_wp_contents() -> list[str]:
+    global _wp_recent_contents
+    if _wp_recent_contents is not None:
+        return _wp_recent_contents
+    if not (API_ENDPOINT and AUTH):
+        _wp_recent_contents = []
+        return _wp_recent_contents
     try:
-        with PUBLISHED_TITLES_PATH.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return set([str(x).strip() for x in data if str(x).strip()])
-        if isinstance(data, dict):
-            return set([str(x).strip() for x in data.get("items", []) if str(x).strip()])
-    except Exception:
-        pass
-    return set()
+        resp = requests.get(
+            API_ENDPOINT,
+            params={"per_page": 30, "status": "publish", "orderby": "date",
+                    "order": "desc", "_fields": "content"},
+            auth=AUTH, timeout=15
+        )
+        if resp.status_code == 200:
+            _wp_recent_contents = [
+                p.get("content", {}).get("rendered", "") for p in resp.json()
+            ]
+        else:
+            _wp_recent_contents = []
+    except Exception as e:
+        print(f"⚠️ Nie udało się pobrać ostatnich postów WP: {e}")
+        _wp_recent_contents = []
+    return _wp_recent_contents
 
-published_keys = _load_published_set()
 
-def save_published_keys(keys: set):
-    with PUBLISHED_TITLES_PATH.open("w", encoding="utf-8") as f:
-        json.dump(sorted(list(keys)), f, ensure_ascii=False, indent=2)
+def _source_url_published(source_url: str) -> bool:
+    """Zwraca True jeśli source URL pojawia się w treści jednego z ostatnich 30 postów."""
+    if not source_url:
+        return False
+    contents = _fetch_recent_wp_contents()
+    return any(source_url in c for c in contents)
+
+
+def _key_for_article(a: dict) -> str:
+    return (a.get("url") or a.get("title") or "").strip()
+
+
+# ─────────────────────────────────────────────
+# ✅ Kategoria "Aktualności" — pobierz lub utwórz
+# ─────────────────────────────────────────────
+_aktualnosci_cat_id: int | None = None
+
+
+def _get_aktualnosci_category_id() -> int:
+    global _aktualnosci_cat_id
+    if _aktualnosci_cat_id is not None:
+        return _aktualnosci_cat_id
+    if not (CATS_ENDPOINT and AUTH):
+        return 0
+    try:
+        resp = requests.get(CATS_ENDPOINT,
+                            params={"search": "Aktualności", "per_page": 10},
+                            auth=AUTH, timeout=10)
+        if resp.status_code == 200:
+            for cat in resp.json():
+                if cat.get("name", "").strip().lower() in ("aktualności", "aktualnosci"):
+                    _aktualnosci_cat_id = cat["id"]
+                    return _aktualnosci_cat_id
+        # nie ma → utwórz
+        resp2 = requests.post(CATS_ENDPOINT, auth=AUTH,
+                              json={"name": "Aktualności"}, timeout=10)
+        if resp2.status_code == 201:
+            _aktualnosci_cat_id = resp2.json()["id"]
+            print(f"✅ Utworzono kategorię 'Aktualności' (ID {_aktualnosci_cat_id})")
+            return _aktualnosci_cat_id
+    except Exception as e:
+        print(f"⚠️ Błąd kategorii: {e}")
+    _aktualnosci_cat_id = 0
+    return 0
+
+
+# ─────────────────────────────────────────────
+# ✅ Ekstrakcja meta description z HTML artykułu
+# ─────────────────────────────────────────────
+def _extract_meta_desc(html: str, maxlen: int = 155) -> str:
+    """Zwraca pierwsze sensowne zdanie z treści (bez tagów HTML)."""
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\s+", " ", text).strip()
+    # pomiń ewentualny tekst H1 na początku (kończący się pierwszą spacją po 20 znakach)
+    if len(text) > maxlen:
+        trimmed = text[:maxlen]
+        # utnij na granicy słowa
+        last_space = trimmed.rfind(" ")
+        if last_space > maxlen // 2:
+            trimmed = trimmed[:last_space]
+        return trimmed.strip() + "…"
+    return text.strip()
 
 def _key_for_article(a: dict) -> str:
     return (a.get("url") or a.get("title") or "").strip()
@@ -154,8 +228,9 @@ def pick_most_relevant_articles(all_articles, n=2, retries=2):
         if not (a.get("lead") or "").strip():
             a["lead"] = _safe_lead(a) or a["title"]
 
-    # ✅ dedupe po URL (fallback title)
-    unpub = [a for a in recent_articles if _key_for_article(a) and _key_for_article(a) not in published_keys]
+    # ✅ dedupe: sprawdzamy WP REST API zamiast lokalnego pliku
+    unpub = [a for a in recent_articles
+             if _key_for_article(a) and not _source_url_published(_key_for_article(a))]
     if not unpub:
         return []
 
@@ -405,9 +480,19 @@ def publish_to_wordpress():
         if featured_media_id:
             body2 = _remove_first_img_tag(body2)
 
-        payload = {"title": title, "content": body2, "status": "publish"}
+        meta_desc = _extract_meta_desc(body2)
+        cat_id = _get_aktualnosci_category_id()
+
+        payload: dict = {
+            "title": title,
+            "content": body2,
+            "status": "publish",
+            "meta": {"_yoast_wpseo_metadesc": meta_desc},
+        }
         if featured_media_id:
             payload["featured_media"] = featured_media_id
+        if cat_id:
+            payload["categories"] = [cat_id]
 
         resp = _post_with_fallback(payload)
         if resp.status_code == 201:
@@ -459,12 +544,7 @@ def main():
     print("\n🌐 5. Publikacja na WordPress...")
     publish_to_wordpress()
 
-    print("\n💾 6. Zapis publikacji (dedupe po URL)...")
-    for art in selected:
-        k = _key_for_article(art)
-        if k:
-            published_keys.add(k)
-    save_published_keys(published_keys)
+    print("\n💾 6. Deduplikacja: source URL zapisany w treści postów WP — brak pliku lokalnego.")
 
     print("\n✅ Zakończono cały pipeline.")
 

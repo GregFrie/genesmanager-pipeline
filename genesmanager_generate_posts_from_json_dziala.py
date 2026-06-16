@@ -37,18 +37,21 @@ def _call_openai(messages, use_primary=True) -> str:
     if client is None:
         raise RuntimeError("Brak klienta OpenAI")
 
-    if use_primary:
-        resp = client.chat.completions.create(
-            model=PRIMARY_MODEL,
-            messages=messages
-        )
-    else:
-        resp = client.chat.completions.create(
-            model=FALLBACK_MODEL,
-            messages=messages,
-            temperature=0.2
-        )
-    return (resp.choices[0].message.content or "").strip()
+    models = [PRIMARY_MODEL, FALLBACK_MODEL] if use_primary else [FALLBACK_MODEL]
+    last_err = None
+    for model in models:
+        try:
+            kwargs = {"model": model, "messages": messages}
+            if model == FALLBACK_MODEL:
+                kwargs["temperature"] = 0.2
+            resp = client.chat.completions.create(**kwargs)
+            result = (resp.choices[0].message.content or "").strip()
+            if result:
+                return result
+        except Exception as e:
+            print(f"⚠️ Model {model} error: {e}")
+            last_err = e
+    raise RuntimeError(f"Wszystkie modele OpenAI niedostępne: {last_err}")
 
 def _clean(text: str) -> str:
     if not text:
@@ -229,13 +232,21 @@ Wymagania kluczowe:
 2) Zakaz Markdown: żadnych #, ##, **, list z myślnikami, żadnych ``` .
 3) Używaj tylko tagów: <h3>, <h4>, <p>, <strong>, <ul>, <li>, <a>.
    - NIE używaj <h2>.
-4) Nagłówki sekcji:
-   - Sam dobierz 5–8 nagłówków <h4> adekwatnych do treści. Nagłówki mają odzwierciedlać to co jest w treści atrykółu którego dotyczą.
-   - Nagłówki mają brzmieć naturalnie, być ciekawe, zachęcać do przeczytania tego czego dotyczą i być redakcyjne, a nie jak lista kontrolna.
-   - NIE wolno używać w nagłówkach sformułowań z prompta (np. „konsekwencje dla NFZ”, „co monitorować”, „ryzyka…”).
-   - Unikaj powtarzania tych samych nazw nagłówków w kolejnych artykułach.
-   - Technika: najpierw napisz treść, a dopiero potem nazwij sekcje krótkimi tytułami <h4>.
-   - Tytuł artykułu MA BYĆ INNY niż tytuł źródła.
+4) Nagłówki sekcji <h4>:
+   - TECHNIKA: napisz najpierw CAŁĄ treść, a dopiero potem dobierz nagłówki do gotowych sekcji.
+   - Każdy nagłówek opisuje KONKRETNĄ treść swojej sekcji — nie ogólne kategorie tematyczne.
+   - Nagłówek = wyrażenie rzeczownikowe lub zdanie twierdzące, 4–9 słów.
+   - ZAKAZ używania tych słów i zwrotów:
+     „Co to oznacza”, „Podsumowanie”, „Wnioski”, „Kontekst”, „Tło sprawy”,
+     „Dla kogo”, „Co dalej”, „Dlaczego to ważne”, „Praktyczne wskazówki”,
+     „Konsekwencje dla…”, „Co monitorować”, „Ryzyka”, „Zmiany”.
+   - WZORZEC dobrego nagłówka (konkretny, charakterystyczny dla tematu):
+     ✓ „Termin składania wniosków upływa 28 lutego”
+     ✓ „NFZ zwiększa wycenę punktu rozliczeniowego o 12%”
+     ✓ „Wymagana aktualizacja wpisu w RPWDL przed 1 marca”
+     ✓ „Nowa umowa z ratownikiem medycznym od pierwszego dnia”
+   - Tytuł artykułu MA BYĆ INNY niż tytuł źródłowy.
+   - Unikaj powtarzania identycznych nagłówków w różnych artykułach.
 5) Styl:
    - profesjonalna polszczyzna,
    - krótkie akapity (1–3 zdania),
