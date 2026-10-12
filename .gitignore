@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+output_blog/
+output_posts/
+bot.env
