@@ -505,6 +505,19 @@ def publish_to_wordpress():
 # 🚀 7. Główna logika
 # ─────────────────────────────────────────────
 def main():
+    # Plan SEO 2026 (12.10.2026): tryb newsowy wyłączony. Newsy nie mają popytu
+    # w wyszukiwarce — Google odrzucił ok. 250 takich wpisów jako niezindeksowane.
+    # Domyślnie automat przygotowuje poradniki z topics.json jako szkice.
+    # Powrót do newsów: zmienna środowiskowa PIPELINE_MODE=news w Renderze.
+    if os.getenv("PIPELINE_MODE", "topics").strip().lower() != "news":
+        from topics_runner import run as run_topics
+        print("\n📚 Tryb poradników (topics.json) — newsy wyłączone.")
+        run_topics()
+        return
+    main_news()
+
+
+def main_news():
     print("\n🛠️ 1. Uruchamianie parsera...")
     parser_path = Path(__file__).parent / "parser_all_sources_combined_dziala.py"
     result = subprocess.run(["python", str(parser_path.resolve())])

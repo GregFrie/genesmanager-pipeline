@@ -138,16 +138,16 @@ Na podstawie poniższego researchu:
 
 WYMAGANIA FORMALNE:
 1) Zwróć WYŁĄCZNIE czysty HTML (bez Markdown, bez komentarzy, bez bloków kodu).
-2) Dozwolone tagi: <h3>, <h4>, <p>, <strong>, <ul>, <li>, <a>. NIE używaj <h1>, <h2>.
+2) Dozwolone tagi: <h2>, <h3>, <p>, <strong>, <ul>, <li>, <a>. NIE używaj <h1> — tytuł wpisu nadaje WordPress.
 3) Długość: MINIMUM 5000 znaków treści.
 
 STRUKTURA ARTYKUŁU (zachowaj tę kolejność):
 - Wstęp (<p>): 2–3 zdania które od razu mówią czytelnikowi dlaczego ten temat go dotyczy i ile może stracić/zyskać.
-- Sekcje tematyczne (<h4> + akapity): pełne, wyczerpujące omówienie tematu.
-- Sekcja końcowa <h3>Kluczowe punkty</h3>: lista <ul> max 6 punktów — najważniejsze rzeczy do zapamiętania i działania.
+- Sekcje tematyczne (<h2> + akapity, w razie potrzeby podsekcje <h3>): pełne, wyczerpujące omówienie tematu.
+- Sekcja końcowa <h2>Kluczowe punkty</h2>: lista <ul> max 6 punktów — najważniejsze rzeczy do zapamiętania i działania.
 
-NAGŁÓWKI <h4>:
-- LIMIT: MAKSYMALNIE 12 nagłówków <h4>. Policz je przed wysłaniem.
+NAGŁÓWKI <h2>:
+- LIMIT: MAKSYMALNIE 10 nagłówków <h2>. Policz je przed wysłaniem.
 - Każdy opisuje KONKRETNĄ treść swojej sekcji — nie ogólne kategorie.
 - Nagłówek = wyrażenie rzeczownikowe lub zdanie twierdzące, 4–10 słów.
 - ZAKAZ (żadna odmiana): „Podsumowanie", „Wnioski", „Kontekst", „Tło", „Dla kogo",
@@ -195,16 +195,16 @@ Na podstawie poniższego researchu:
 
 WYMAGANIA FORMALNE:
 1) Zwróć WYŁĄCZNIE czysty HTML (bez Markdown, bez komentarzy, bez bloków kodu).
-2) Dozwolone tagi: <h3>, <h4>, <p>, <strong>, <ul>, <li>, <a>. NIE używaj <h1>, <h2>.
+2) Dozwolone tagi: <h2>, <h3>, <p>, <strong>, <ul>, <li>, <a>. NIE używaj <h1> — tytuł wpisu nadaje WordPress.
 3) Długość: 2500–3500 znaków treści. Nie rozpisuj się — każde zdanie musi wnosić wartość.
 
 STRUKTURA ARTYKUŁU:
 - Wstęp (<p>): 1–2 zdania — konkretna sytuacja której dotyczy artykuł.
-- Sekcje tematyczne (<h4> + akapity): skupione WYŁĄCZNIE na temacie tego artykułu.
+- Sekcje tematyczne (<h2> + akapity): skupione WYŁĄCZNIE na temacie tego artykułu.
 - NIE staraj się objąć całego obszaru tematycznego — to jest rola artykułu filarowego.
 
-NAGŁÓWKI <h4>:
-- LIMIT: MAKSYMALNIE 6 nagłówków <h4>. Policz je przed wysłaniem.
+NAGŁÓWKI <h2>:
+- LIMIT: MAKSYMALNIE 6 nagłówków <h2>. Policz je przed wysłaniem.
 - Każdy opisuje KONKRETNĄ treść swojej sekcji — nie ogólne kategorie.
 - Nagłówek = wyrażenie rzeczownikowe lub zdanie twierdzące, 4–10 słów.
 - ZAKAZ (żadna odmiana): „Podsumowanie", „Wnioski", „Kontekst", „Tło", „Dla kogo",
