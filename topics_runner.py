@@ -30,7 +30,7 @@ HEADERS = {"User-Agent": "GenesManager/1.0 (+requests)", "Accept": "application/
 TOPICS_PATH = Path(__file__).parent / "topics.json"
 CADENCE_DAYS = int(os.getenv("TOPICS_CADENCE_DAYS", "7"))
 TAG_SLUG = "poradnik"
-CATEGORY_SLUG = "blog"
+CATEGORY_SLUG = "poradniki"
 
 # Kolejność ze strategii SEO (Marketing/strategia-seo-2026.md, rozdz. 5):
 # najpierw tematy wspierające o wysokiej intencji w kolejności usług
