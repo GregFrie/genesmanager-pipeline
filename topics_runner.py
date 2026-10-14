@@ -28,14 +28,17 @@ API = f"{WP_URL}/wp-json/wp/v2"
 HEADERS = {"User-Agent": "GenesManager/1.0 (+requests)", "Accept": "application/json"}
 
 TOPICS_PATH = Path(__file__).parent / "topics.json"
-CADENCE_DAYS = int(os.getenv("TOPICS_CADENCE_DAYS", "7"))
+# 2,9 a nie 3: runner startuje raz dziennie o podobnej porze, a szkic powstaje kilka minut po starcie,
+# więc po trzech dniach „since” wynosi ok. 2,99 — przy progu 3 rytm wydłużyłby się do 4 dni.
+CADENCE_DAYS = float(os.getenv("TOPICS_CADENCE_DAYS", "2.9"))   # ok. 2 szkice tygodniowo (od 14.10.2026)
 TAG_SLUG = "poradnik"
 CATEGORY_SLUG = "poradniki"
 
 # Kolejność ze strategii SEO (Marketing/strategia-seo-2026.md, rozdz. 5):
 # najpierw tematy wspierające o wysokiej intencji w kolejności usług
 # (audyty → rozliczenia → konkursy → rejestracja), filary na końcu.
-QUEUE = [14, 13, 10, 4, 2, 3, 6, 8, 12, 1, 5, 9, 7, 11, 15, 16, 17, 18, 19, 20]
+# 21–23 (14.10.2026): tematy, na których widoczny jest gpmed.pl — outsourcing wcześnie, bo to intencja zakupowa.
+QUEUE = [14, 13, 10, 21, 4, 2, 3, 12, 22, 6, 8, 1, 5, 9, 23, 7, 11, 15, 16, 17, 18, 19, 20]
 
 
 def _norm(title: str) -> str:

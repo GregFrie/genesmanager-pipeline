@@ -30,6 +30,7 @@ IMAGE_SIZE      = "1024x1024"
 GENESMANAGER_LINKS = [
     "https://genesmanager.pl/rozliczenia-z-nfz/",
     "https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/",
+    "https://genesmanager.pl/audyt-rozliczen-nfz/",
     "https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/",
     "https://genesmanager.pl/rejestracja-podmiotu-leczniczego/",
 ]

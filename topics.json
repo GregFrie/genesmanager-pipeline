@@ -258,5 +258,44 @@
     "published": false,
     "published_date": null,
     "failed": false
+  },
+  {
+    "id": 21,
+    "type": "cluster",
+    "pillar_id": 3,
+    "title": "Outsourcing rozliczeń z NFZ czy własny pracownik – co się bardziej opłaca",
+    "angle": "Fraza: \"outsourcing rozliczeń NFZ\". Porównanie kosztów i ryzyk: wynagrodzenie i zastępstwa przy etacie, wiedza o zarządzeniach Prezesa NFZ, odpowiedzialność za błędy, korekty, ciągłość przy urlopach i odejściu pracownika. Tabela porównawcza. Bez podawania cen GenesManager. Kiedy własny pracownik ma sens (duża placówka, jeden rodzaj świadczeń). Konkurencja (gpmed.pl) ma krótki wpis na ten temat — tekst ma być pełniejszy i konkretny.",
+    "service_cta": "https://genesmanager.pl/rozliczenia-z-nfz/",
+    "category": "finanse",
+    "priority": 2,
+    "published": false,
+    "published_date": null,
+    "failed": false
+  },
+  {
+    "id": 22,
+    "type": "cluster",
+    "pillar_id": 1,
+    "title": "Portal SZOI NFZ – co to jest, do czego służy i jak z niego korzystać",
+    "angle": "Fraza: \"SZOI NFZ\". Czym jest SZOI (System Zarządzania Obiegiem Informacji) dla świadczeniodawców: dostęp i konta, aktualizacja danych (personel, harmonogramy, zasoby), oferty w konkursach, umowy i ich zmiany, przekazywanie i weryfikacja rozliczeń. Różnice regionalne między oddziałami NFZ (portal świadczeniodawcy). Najczęstsze błędy przy aktualizacji danych i ich skutki przy kontroli. Fakty sprawdzać w źródłach NFZ, nie zgadywać nazw modułów.",
+    "service_cta": "https://genesmanager.pl/rozliczenia-z-nfz/",
+    "category": "kontrakty_nfz",
+    "priority": 2,
+    "published": false,
+    "published_date": null,
+    "failed": false
+  },
+  {
+    "id": 23,
+    "type": "cluster",
+    "pillar_id": 3,
+    "title": "Opieka koordynowana w POZ – co zmienia dla placówki i jak ją rozliczać",
+    "angle": "Fraza: \"opieka koordynowana POZ\". Na czym polega opieka koordynowana w POZ, warunki dla placówki (koordynator, budżet powierzony, porady kompleksowe, konsultacje specjalistyczne), jak wpływa na rozliczenia z NFZ i jakie błędy popełniają placówki. Wymaga sprawdzenia aktualnego zarządzenia Prezesa NFZ dla POZ — podawać numer i datę zarządzenia ze źródła.",
+    "service_cta": "https://genesmanager.pl/rozliczenia-z-nfz/",
+    "category": "finanse",
+    "priority": 3,
+    "published": false,
+    "published_date": null,
+    "failed": false
   }
 ]
