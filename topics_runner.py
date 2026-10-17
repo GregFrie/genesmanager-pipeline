@@ -100,7 +100,9 @@ def _upload_image(path: Path, title: str) -> tuple[str | None, int | None]:
 
 
 def _meta_desc(html: str, maxlen: int = 155) -> str:
-    m = re.search(r"<p[^>]*>(.*?)</p>", html, flags=re.S | re.I)
+    # Pierwszy akapit wstępu — pomijamy linię z datą aktualizacji (<em>) i ramkę kontaktową.
+    html = re.sub(r'<div class="gm-cta".*?</div>', "", html, flags=re.S | re.I)
+    m = re.search(r"<p[^>]*>(?!\s*<em>)(.*?)</p>", html, flags=re.S | re.I)
     text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(1) if m else html)).strip()
     return text if len(text) <= maxlen else text[:maxlen - 1].rsplit(" ", 1)[0] + "…"
 

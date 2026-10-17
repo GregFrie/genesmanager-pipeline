@@ -2,7 +2,10 @@ import os
 import re
 import base64
 import json
+from datetime import date
 from pathlib import Path
+
+import requests
 from dotenv import load_dotenv
 
 try:
@@ -34,6 +37,36 @@ GENESMANAGER_LINKS = [
     "https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/",
     "https://genesmanager.pl/rejestracja-podmiotu-leczniczego/",
 ]
+
+# Wymogi recenzji merytorycznej z 13.10.2026 — opublikowane poradniki (4756–4758) są wzorem.
+# Ramkę CTA model wypełnia sam (pytanie i zdanie pod temat), reszta wzoru jest stała.
+CTA_TEMPLATE = """<div class="gm-cta" style="border-left:4px solid #1f6feb;background:#f3f6fa;padding:16px 20px;margin:24px 0;">
+<p><strong>[PYTANIE DO CZYTELNIKA W JEGO SYTUACJI]</strong> Zadzwoń lub napisz. [CO MA PODAĆ, np. rodzaj świadczeń, datę pisma]. [CO SPRAWDZIMY]. Na tym etapie nie wysyłaj nam dokumentacji pacjentów.</p>
+<p><a href="tel:+48502514023"><strong>Zadzwoń: 502 514 023</strong></a> · <a href="https://genesmanager.pl/kontakt/"><strong>[KRÓTKIE WEZWANIE, np. Umów bezpłatną konsultację]</strong></a></p>
+</div>"""
+
+EDITORIAL_RULES = f"""
+RAMKA KONTAKTOWA (obowiązkowa):
+- Zaraz po wstępie wstaw ramkę według wzoru poniżej. Zmień tylko fragmenty w nawiasach kwadratowych, resztę przepisz dosłownie:
+{CTA_TEMPLATE}
+
+RZETELNOŚĆ (tekst przechodzi recenzję prawną):
+- Żadnych kategorycznych uogólnień bez podstawy. Gdy reguła ma wyjątki, napisz to („co do zasady”, „z wyjątkiem…”) albo wskaż, gdzie czytelnik sprawdzi szczegóły (umowa, zarządzenie Prezesa NFZ).
+- Żadnych procentów, widełek i statystyk, których nie ma w researchu z podanym źródłem. Szacunki „z praktyki” pomijaj.
+- Fakty oznaczone w researchu jako „niepewne” pomijaj.
+- Nie pisz „pełny katalog”, „zawsze”, „nigdy”, jeżeli research tego nie potwierdza przepisem.
+- Nie doradzaj pobierania opłat za świadczenia, do których pacjent ma prawo w ramach umowy z NFZ.
+- Bez marketingowego pośpiechu („Nie zwlekaj”, „Działaj już dziś”). Zakończ konkretem: co czytelnik będzie wiedział lub miał po wykonaniu kroków.
+- Zwracaj się do czytelnika na „ty”.
+""".strip()
+
+SOURCES_RULES = """
+PODSTAWA PRAWNA (ostatni element tekstu):
+- Zakończ akapitem: <p><em>Stan prawny: [akty]. Artykuł ma charakter informacyjny i nie zastępuje analizy konkretnej sprawy.</em></p>
+- W miejsce [akty] wpisz tylko akty z researchu, na które powołuje się tekst, w formacie: pełna nazwa aktu (Dz.U. z RRRR r. poz. NNN), wskazane artykuły lub paragrafy.
+- Nie dodawaj linków do aktów — linki do ISAP dodaje program po sprawdzeniu, że akt istnieje.
+- Jeśli tekst nie powołuje się na żaden akt, napisz tylko drugie zdanie (bez „Stan prawny”).
+""".strip()
 
 # ─────────────────────────────────────────────
 # HELPERS
@@ -109,6 +142,8 @@ Zakres researchu — odpowiedz wyczerpująco na każdy punkt:
 WAŻNE:
 - Podawaj tylko ZWERYFIKOWANE fakty. Jeśli nie jesteś pewien konkretnej liczby/daty — zaznacz to wyraźnie jako „niepewne" lub pomiń.
 - Nie wymyślaj numerów zarządzeń NFZ ani dat ustaw których nie znasz.
+- Przy każdym twierdzeniu prawnym podaj akt w formacie: nazwa aktu (Dz.U. z RRRR r. poz. NNN), artykuł lub paragraf. Bez tego twierdzenie nie trafi do artykułu.
+- Liczby i odsetki „z praktyki rynkowej” bez źródła oznacz jako „niepewne”.
 - Pisz po polsku, rzeczowo, bez lania wody.
 """.strip()
 
@@ -139,7 +174,7 @@ Na podstawie poniższego researchu:
 
 WYMAGANIA FORMALNE:
 1) Zwróć WYŁĄCZNIE czysty HTML (bez Markdown, bez komentarzy, bez bloków kodu).
-2) Dozwolone tagi: <h2>, <h3>, <p>, <strong>, <ul>, <li>, <a>. NIE używaj <h1> — tytuł wpisu nadaje WordPress.
+2) Dozwolone tagi: <h2>, <h3>, <p>, <strong>, <em>, <ul>, <li>, <a> oraz <div> wyłącznie w ramce kontaktowej. NIE używaj <h1> — tytuł wpisu nadaje WordPress.
 3) Długość: MINIMUM 5000 znaków treści.
 
 STRUKTURA ARTYKUŁU (zachowaj tę kolejność):
@@ -162,7 +197,7 @@ NAGŁÓWKI <h2>:
 
 STYL:
 - Piszesz do właściciela lub managera przychodni — osoby która nie zna żargonu prawniczego, ale potrzebuje konkretów.
-- Format odpowiedzi na potrzeby czytelnika: sytuacja → problem → konsekwencje → co zrobić → termin/urgency.
+- Format odpowiedzi na potrzeby czytelnika: sytuacja → problem → konsekwencje → co zrobić → termin (jeśli wynika z przepisu).
 - Profesjonalna polszczyzna, krótkie akapity (2–4 zdania).
 - Nie pisz o sobie ani o GenesManager w trzeciej osobie — link wystarczy.
 - Nie wymyślaj liczb, dat ani numerów aktów prawnych których nie ma w researchu.
@@ -170,7 +205,11 @@ STYL:
 LINKI DO GENESMANAGER:
 {cta_instruction}
 
-Nie dodawaj sekcji „Źródło". Zwróć wyłącznie HTML.
+{EDITORIAL_RULES}
+
+{SOURCES_RULES}
+
+Zwróć wyłącznie HTML.
 """.strip()
 
 
@@ -196,7 +235,7 @@ Na podstawie poniższego researchu:
 
 WYMAGANIA FORMALNE:
 1) Zwróć WYŁĄCZNIE czysty HTML (bez Markdown, bez komentarzy, bez bloków kodu).
-2) Dozwolone tagi: <h2>, <h3>, <p>, <strong>, <ul>, <li>, <a>. NIE używaj <h1> — tytuł wpisu nadaje WordPress.
+2) Dozwolone tagi: <h2>, <h3>, <p>, <strong>, <em>, <ul>, <li>, <a> oraz <div> wyłącznie w ramce kontaktowej. NIE używaj <h1> — tytuł wpisu nadaje WordPress.
 3) Długość: 2500–3500 znaków treści. Nie rozpisuj się — każde zdanie musi wnosić wartość.
 
 STRUKTURA ARTYKUŁU:
@@ -215,14 +254,18 @@ NAGŁÓWKI <h2>:
 
 STYL:
 - Piszesz do właściciela lub managera przychodni.
-- Format: sytuacja → problem → konsekwencje → co zrobić → termin/urgency.
+- Format: sytuacja → problem → konsekwencje → co zrobić → termin (jeśli wynika z przepisu).
 - Profesjonalna polszczyzna, krótkie akapity (2–3 zdania).
 - Nie wymyślaj liczb, dat ani numerów aktów prawnych których nie ma w researchu.
 
 LINKI DO GENESMANAGER:
 {cta_instruction}
 
-Nie dodawaj sekcji „Źródło". Zwróć wyłącznie HTML.
+{EDITORIAL_RULES}
+
+{SOURCES_RULES}
+
+Zwróć wyłącznie HTML.
 """.strip()
 
 
@@ -274,6 +317,35 @@ def _generate_image_png(description: str, out_path: Path) -> bool:
     out_path.parent.mkdir(exist_ok=True, parents=True)
     out_path.write_bytes(base64.b64decode(b64))
     return True
+
+
+# ─────────────────────────────────────────────
+# PODSTAWA PRAWNA — linki do ISAP po sprawdzeniu w API Sejmu (ELI)
+# ─────────────────────────────────────────────
+DZU_RE = re.compile(r"Dz\.\s?U\.\s?z\s?(\d{4})\s?r\.\s?poz\.\s?(\d+)")
+
+def _act_exists(year: str, pos: str) -> bool | None:
+    """True/False wg api.sejm.gov.pl; None, gdy API nie odpowiada."""
+    try:
+        r = requests.get(f"https://api.sejm.gov.pl/eli/acts/DU/{year}/{int(pos)}",
+                         headers={"User-Agent": "GenesManager/1.0"}, timeout=20)
+    except Exception:
+        return None
+    if r.status_code == 404:
+        return False
+    return bool(r.ok and r.json().get("title"))
+
+def _link_sources(html: str) -> str:
+    """Każdy „Dz.U. z RRRR r. poz. N” → link do ISAP; akt nieznaleziony → znacznik dla recenzenta."""
+    def repl(m):
+        year, pos = m.group(1), m.group(2)
+        ok = _act_exists(year, pos)
+        if ok is False:
+            return f'{m.group(0)} <strong>[SPRAWDŹ: brak takiego aktu w ISAP]</strong>'
+        if ok is None:
+            return f'{m.group(0)} <strong>[SPRAWDŹ: API Sejmu nie odpowiedziało]</strong>'
+        return f'<a href="https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU{year}{int(pos):07d}">{m.group(0)}</a>'
+    return DZU_RE.sub(repl, html)
 
 
 # ─────────────────────────────────────────────
@@ -331,6 +403,10 @@ def generate_blog_post(topic: dict) -> Path:
     ], use_primary=True)
     html = _clean(html)
     html = re.sub(r"<h1[^>]*>.*?</h1>\s*", "", html, flags=re.I | re.S).strip()
+    html = _link_sources(html)
+    # Data szkicu — recenzent podmienia ją na datę publikacji.
+    html = (f"<p><em>Opracowanie: zespół GenesManager. Stan prawny i data aktualizacji: "
+            f"{date.today():%d.%m.%Y}.</em></p>\n\n{html}")
 
     # ── SKŁADANIE PLIKU ──
     img_tag = (
