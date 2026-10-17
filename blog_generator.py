@@ -60,6 +60,9 @@ RZETELNOŚĆ (tekst przechodzi recenzję prawną):
 - Zwracaj się do czytelnika na „ty”.
 """.strip()
 
+# Wytyczne stylu z recenzji (13.10 i 17.10.2026) — jedno miejsce, dopisujemy tam nowe uwagi.
+WYTYCZNE = (Path(__file__).resolve().parent / "WYTYCZNE_PORADNIKI.md").read_text(encoding="utf-8")
+
 SOURCES_RULES = """
 PODSTAWA PRAWNA (ostatni element tekstu):
 - Zakończ akapitem: <p><em>Stan prawny: [akty]. Artykuł ma charakter informacyjny i nie zastępuje analizy konkretnej sprawy.</em></p>
@@ -185,7 +188,7 @@ STRUKTURA ARTYKUŁU (zachowaj tę kolejność):
 NAGŁÓWKI <h2>:
 - LIMIT: MAKSYMALNIE 10 nagłówków <h2>. Policz je przed wysłaniem.
 - Każdy opisuje KONKRETNĄ treść swojej sekcji — nie ogólne kategorie.
-- Nagłówek = wyrażenie rzeczownikowe lub zdanie twierdzące, 4–10 słów.
+- Forma nagłówków według WYTYCZNYCH PORADNIKÓW poniżej (różnicuj: część pytań, część zdań; bez etykiet z dwukropkiem).
 - ZAKAZ (żadna odmiana): „Podsumowanie", „Wnioski", „Kontekst", „Tło", „Dla kogo",
   „Co dalej", „Dlaczego to ważne", „Praktyczne wskazówki", „Konsekwencje dla…",
   „monitorować", „monitoring", „Ryzyka", „Zmiany", nagłówki zaczynające się od liczebnika + czynność,
@@ -197,8 +200,7 @@ NAGŁÓWKI <h2>:
 
 STYL:
 - Piszesz do właściciela lub managera przychodni — osoby która nie zna żargonu prawniczego, ale potrzebuje konkretów.
-- Format odpowiedzi na potrzeby czytelnika: sytuacja → problem → konsekwencje → co zrobić → termin (jeśli wynika z przepisu).
-- Profesjonalna polszczyzna, krótkie akapity (2–4 zdania).
+- Pisz zgodnie z WYTYCZNYMI PORADNIKÓW poniżej — naturalnie, jak konsultant, nie według stałego schematu sekcji.
 - Nie pisz o sobie ani o GenesManager w trzeciej osobie — link wystarczy.
 - Nie wymyślaj liczb, dat ani numerów aktów prawnych których nie ma w researchu.
 
@@ -206,6 +208,9 @@ LINKI DO GENESMANAGER:
 {cta_instruction}
 
 {EDITORIAL_RULES}
+
+WYTYCZNE PORADNIKÓW:
+{WYTYCZNE}
 
 {SOURCES_RULES}
 
@@ -246,7 +251,7 @@ STRUKTURA ARTYKUŁU:
 NAGŁÓWKI <h2>:
 - LIMIT: MAKSYMALNIE 6 nagłówków <h2>. Policz je przed wysłaniem.
 - Każdy opisuje KONKRETNĄ treść swojej sekcji — nie ogólne kategorie.
-- Nagłówek = wyrażenie rzeczownikowe lub zdanie twierdzące, 4–10 słów.
+- Forma nagłówków według WYTYCZNYCH PORADNIKÓW poniżej (różnicuj: część pytań, część zdań; bez etykiet z dwukropkiem).
 - ZAKAZ (żadna odmiana): „Podsumowanie", „Wnioski", „Kontekst", „Tło", „Dla kogo",
   „Co dalej", „Dlaczego to ważne", „Praktyczne wskazówki", „Konsekwencje dla…",
   „monitorować", „monitoring", „Ryzyka", „Zmiany", nagłówki zaczynające się od liczebnika + czynność,
@@ -254,8 +259,7 @@ NAGŁÓWKI <h2>:
 
 STYL:
 - Piszesz do właściciela lub managera przychodni.
-- Format: sytuacja → problem → konsekwencje → co zrobić → termin (jeśli wynika z przepisu).
-- Profesjonalna polszczyzna, krótkie akapity (2–3 zdania).
+- Pisz zgodnie z WYTYCZNYMI PORADNIKÓW poniżej — naturalnie, jak konsultant, nie według stałego schematu sekcji.
 - Nie wymyślaj liczb, dat ani numerów aktów prawnych których nie ma w researchu.
 
 LINKI DO GENESMANAGER:
@@ -263,9 +267,43 @@ LINKI DO GENESMANAGER:
 
 {EDITORIAL_RULES}
 
+WYTYCZNE PORADNIKÓW:
+{WYTYCZNE}
+
 {SOURCES_RULES}
 
 Zwróć wyłącznie HTML.
+""".strip()
+
+
+# ─────────────────────────────────────────────
+# REDAKCJA — drugi przebieg, tylko język
+# ─────────────────────────────────────────────
+def _redakcja_prompt(html: str) -> str:
+    return f"""
+Przeredaguj poniższy szkic poradnika tak, żeby brzmiał jak wyjaśnienie doświadczonego konsultanta,
+a nie jak tekst pisany według szablonu. Stosuj wytyczne poniżej.
+
+NIE WOLNO zmieniać ani usuwać:
+- faktów, liczb, dat, kwot, terminów i jednostek redakcyjnych przepisów (art., §, ust., pkt);
+- linków (<a href>) i ich adresów;
+- ramki <div class="gm-cta"> — przepisz ją dosłownie;
+- ostatniego akapitu ze „Stan prawny” — przepisz go dosłownie.
+Nie dodawaj nowych faktów ani przepisów.
+
+WOLNO i NALEŻY:
+- zmienić nagłówki na konkretne i zróżnicowane (część pytań, część zdań), bez etykiet z dwukropkiem;
+- usunąć powtarzalne etykiety typu „Co zrobić:” i wpleść wskazówki w tekst;
+- dzielić przeładowane akapity, skracać zdania, poprawiać niezręczne związki wyrazowe;
+- skrócić plan końcowy do 4–5 kroków w logicznej kolejności.
+
+WYTYCZNE PORADNIKÓW:
+{WYTYCZNE}
+
+SZKIC:
+{html}
+
+Zwróć wyłącznie poprawiony HTML (te same dozwolone tagi).
 """.strip()
 
 
@@ -403,6 +441,22 @@ def generate_blog_post(topic: dict) -> Path:
     ], use_primary=True)
     html = _clean(html)
     html = re.sub(r"<h1[^>]*>.*?</h1>\s*", "", html, flags=re.I | re.S).strip()
+
+    # ── ETAP 4: REDAKCJA JĘZYKOWA ──
+    # Recenzja z 17.10.2026: tekst brzmiał jak szablon (nagłówki-etykiety, „Co zrobić”
+    # w każdej sekcji, ciężkie akapity). Osobny przebieg redaktora poprawia język,
+    # nie ruszając faktów — weryfikacja merytoryczna i tak zostaje przed publikacją.
+    print("  🖊️  Redakcja językowa...", flush=True)
+    poprawiony = _clean(_call_openai([
+        {"role": "system", "content": "Jesteś redaktorem polskiego tekstu poradnikowego. Zwracasz wyłącznie HTML."},
+        {"role": "user",   "content": _redakcja_prompt(html)},
+    ], use_primary=True))
+    # Zabezpieczenie: redakcja nie może zgubić ramki kontaktowej ani podstawy prawnej.
+    if "gm-cta" in poprawiony and ("Stan prawny" in poprawiony or "Stan prawny" not in html):
+        html = re.sub(r"<h1[^>]*>.*?</h1>\s*", "", poprawiony, flags=re.I | re.S).strip()
+    else:
+        print("  ⚠️ Redakcja zgubiła ramkę albo źródła — zostaje wersja przed redakcją.", flush=True)
+
     html = _link_sources(html)
     # Klasy gm-meta / gm-zrodla stylizuje CSS szablonu wpisu (Elementor #473).
     stan = [m.start() for m in re.finditer(r"<p>\s*<em>\s*(Stan prawny|Artykuł ma charakter)", html)]
