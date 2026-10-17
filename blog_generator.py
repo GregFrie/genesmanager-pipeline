@@ -404,8 +404,12 @@ def generate_blog_post(topic: dict) -> Path:
     html = _clean(html)
     html = re.sub(r"<h1[^>]*>.*?</h1>\s*", "", html, flags=re.I | re.S).strip()
     html = _link_sources(html)
+    # Klasy gm-meta / gm-zrodla stylizuje CSS szablonu wpisu (Elementor #473).
+    stan = [m.start() for m in re.finditer(r"<p>\s*<em>\s*(Stan prawny|Artykuł ma charakter)", html)]
+    if stan:
+        html = html[:stan[-1]] + '<p class="gm-zrodla">' + html[stan[-1] + 3:]
     # Data szkicu — recenzent podmienia ją na datę publikacji.
-    html = (f"<p><em>Opracowanie: zespół GenesManager. Stan prawny i data aktualizacji: "
+    html = (f"<p class=\"gm-meta\"><em>Opracowanie: zespół GenesManager. Stan prawny i data aktualizacji: "
             f"{date.today():%d.%m.%Y}.</em></p>\n\n{html}")
 
     # ── SKŁADANIE PLIKU ──
