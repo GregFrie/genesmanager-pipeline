@@ -28,7 +28,7 @@ IMAGES_DIR.mkdir(exist_ok=True)
 PRIMARY_MODEL   = "gpt-5"
 FALLBACK_MODEL  = "gpt-4o-mini"
 IMAGE_MODEL     = "gpt-image-1"
-IMAGE_SIZE      = "1024x1024"
+IMAGE_SIZE      = "1536x1024"   # poziomo — obrazek wyróżniający w szablonie wpisu
 
 GENESMANAGER_LINKS = [
     "https://genesmanager.pl/rozliczenia-z-nfz/",
@@ -317,6 +317,11 @@ Wymyśl realistyczne, neutralne zdjęcie stockowe pasujące do artykułu:
 
 Wymagania:
 - tematyka: ochrona zdrowia, zarządzanie placówką medyczną, dokumentacja, finanse, prawo medyczne
+- POLSKIE REALIA (uwaga Grzegorza z 18.10.2026 — wcześniejsze obrazki wyglądały jak amerykański stock):
+  zwyczajna polska przychodnia lub NZOZ (rejestracja z ladą, korytarz z drzwiami gabinetów, plastikowe
+  krzesła, segregatory, wykładzina PCV, świetlówki), biuro administracyjne z widokiem na polskie osiedle;
+  ludzie wyglądający jak typowi pacjenci i pracownicy polskiej przychodni, w różnym wieku, ubrani zwyczajnie;
+  skromne, czyste wnętrza zamiast luksusowych szpitali i sal konferencyjnych
 - brak logo NFZ/MZ i brak osób publicznych
 - styl: naturalne światło, reportażowe, bez „AI looku"
 - żadnych napisów na zdjęciu
@@ -339,7 +344,7 @@ def _generate_image_png(description: str, out_path: Path) -> bool:
         raise RuntimeError("Brak klienta OpenAI")
     prompt = (
         f"Realistyczne zdjęcie stockowe: {description}. "
-        "Naturalne światło, brak napisów, brak logotypów, brak osób publicznych. "
+        "Polskie realia, zwyczajna polska przychodnia. Naturalne światło, brak napisów, liter i cyfr, brak logotypów, brak osób publicznych. "
         "Wygląd jak prawdziwa fotografia."
     )
     resp = client.images.generate(model=IMAGE_MODEL, prompt=prompt, size=IMAGE_SIZE)
