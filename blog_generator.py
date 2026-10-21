@@ -365,10 +365,11 @@ def _generate_image_png(description: str, out_path: Path) -> bool:
 # ─────────────────────────────────────────────
 # PODSTAWA PRAWNA — linki do ISAP po sprawdzeniu w API Sejmu (ELI)
 # ─────────────────────────────────────────────
-DZU_RE = re.compile(r"Dz\.\s?U\.\s?z\s?(\d{4})\s?r\.\s?poz\.\s?(\d+)")
+# Łapie też pierwodruki: „Dz.U. 2004 nr 210 poz. 2135”, „Dz.U. z 2004 r. Nr 210, poz. 2135”, „Dz.U. 2015 poz. 1400”.
+DZU_RE = re.compile(r"Dz\.\s?U\.\s?(?:z\s?)?(\d{4})(?:\s?r\.)?,?\s?(?:[Nn]r\s?\d+,?\s?)?poz\.\s?(\d+)")
 
-def _act_exists(year: str, pos: str) -> bool | None:
-    """True/False wg api.sejm.gov.pl; None, gdy API nie odpowiada."""
+def _eli(year, pos) -> dict | bool | None:
+    """Opis aktu z api.sejm.gov.pl; False, gdy aktu nie ma; None, gdy API nie odpowiada."""
     try:
         r = requests.get(f"https://api.sejm.gov.pl/eli/acts/DU/{year}/{int(pos)}",
                          headers={"User-Agent": "GenesManager/1.0"}, timeout=20)
@@ -376,18 +377,39 @@ def _act_exists(year: str, pos: str) -> bool | None:
         return None
     if r.status_code == 404:
         return False
-    return bool(r.ok and r.json().get("title"))
+    if not r.ok or not r.json().get("title"):
+        return None
+    return r.json()
+
+def _ref_ids(act: dict, prefix: str) -> list[tuple[int, int]]:
+    refs = next((v for k, v in act.get("references", {}).items() if k.startswith(prefix)), [])
+    return sorted(tuple(map(int, x["id"].split("/")[1:3])) for x in refs)
+
+def _current_text(year, pos):
+    """(rok, poz., uwaga) aktualnego tekstu jednolitego; model podaje zwykle pierwodruk albo stary t.j.
+    (21.10.2026: poradnik 4797 cytował ustawę o świadczeniach z 2004 r. i OWU z 2015 r.)."""
+    act = _eli(year, pos)
+    if not act:
+        return None, None, ("brak takiego aktu w ISAP" if act is False else "API Sejmu nie odpowiedziało")
+    original = _ref_ids(act, "Tekst jednolity dla aktu")   # cytat wskazał tekst jednolity → wracamy do aktu
+    if original:
+        year, pos = original[-1]
+        act = _eli(year, pos) or act
+    if act.get("inForce") not in (None, "IN_FORCE"):
+        return int(year), int(pos), "akt nie obowiązuje"
+    texts = _ref_ids(act, "Inf. o tekście jednolitym")
+    y, p = texts[-1] if texts else (int(year), int(pos))
+    return y, p, None
 
 def _link_sources(html: str) -> str:
-    """Każdy „Dz.U. z RRRR r. poz. N” → link do ISAP; akt nieznaleziony → znacznik dla recenzenta."""
+    """Każdy cytat Dz.U. → aktualny tekst jednolity z linkiem do ISAP; problem → znacznik dla recenzenta."""
     def repl(m):
-        year, pos = m.group(1), m.group(2)
-        ok = _act_exists(year, pos)
-        if ok is False:
-            return f'{m.group(0)} <strong>[SPRAWDŹ: brak takiego aktu w ISAP]</strong>'
-        if ok is None:
-            return f'{m.group(0)} <strong>[SPRAWDŹ: API Sejmu nie odpowiedziało]</strong>'
-        return f'<a href="https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU{year}{int(pos):07d}">{m.group(0)}</a>'
+        year, pos, note = _current_text(m.group(1), m.group(2))
+        if year is None:
+            return f'{m.group(0)} <strong>[SPRAWDŹ: {note}]</strong>'
+        cite = f'Dz.U. z {year} r. poz. {pos}'
+        link = f'<a href="https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU{year}{pos:07d}">{cite}</a>'
+        return link + (f' <strong>[SPRAWDŹ: {note}]</strong>' if note else '')
     return DZU_RE.sub(repl, html)
 
 
