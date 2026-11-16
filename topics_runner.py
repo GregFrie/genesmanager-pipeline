@@ -38,7 +38,8 @@ CATEGORY_SLUG = "poradniki"
 # najpierw tematy wspierające o wysokiej intencji w kolejności usług
 # (audyty → rozliczenia → konkursy → rejestracja), filary na końcu.
 # 21–23 (14.10.2026): tematy, na których widoczny jest gpmed.pl — outsourcing wcześnie, bo to intencja zakupowa.
-QUEUE = [14, 13, 10, 21, 4, 2, 3, 12, 22, 6, 8, 1, 5, 9, 23, 7, 11, 15, 16, 17, 18, 19, 20]
+# 16.11.2026: najpierw tematy dla usług bez linków z bloga (rejestracja, sanitarne, stały nadzór, FEnIKS).
+QUEUE = [6, 24, 26, 27, 8, 25, 14, 13, 10, 21, 4, 2, 3, 12, 22, 1, 5, 9, 23, 7, 11, 15, 16, 17, 18, 19, 20]
 
 
 def _norm(title: str) -> str:

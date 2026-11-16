@@ -30,12 +30,15 @@ FALLBACK_MODEL  = "gpt-4o-mini"
 IMAGE_MODEL     = "gpt-image-1"
 IMAGE_SIZE      = "1536x1024"   # poziomo — obrazek wyróżniający w szablonie wpisu
 
+# Strony usług po przebudowie strony (16.11.2026); audyt-rozliczen-nfz przekierowany do audytów.
 GENESMANAGER_LINKS = [
-    "https://genesmanager.pl/rozliczenia-z-nfz/",
-    "https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/",
-    "https://genesmanager.pl/audyt-rozliczen-nfz/",
-    "https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/",
     "https://genesmanager.pl/rejestracja-podmiotu-leczniczego/",
+    "https://genesmanager.pl/przygotowanie-oferty-konkursowej-do-nfz/",
+    "https://genesmanager.pl/rozliczenia-z-nfz/",
+    "https://genesmanager.pl/nadzor-sanitarny-i-bezpieczenstwo-epidemiologiczne/",
+    "https://genesmanager.pl/audyty-dla-podmiotow-leczniczych/",
+    "https://genesmanager.pl/nadzor-nad-podmiotem-leczniczym/",
+    "https://genesmanager.pl/projekty_feniks/",
 ]
 
 # Wymogi recenzji merytorycznej z 13.10.2026 — opublikowane poradniki (4756–4758) są wzorem.
